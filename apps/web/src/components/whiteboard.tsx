@@ -120,13 +120,15 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   // Shapes painted bottom-to-top by stacking order.
   const ordered = sortByZ(shapeList);
 
-  // A single selected, resizable shape gets resize handles. Text is sized via
-  // its font controls, so it's excluded.
+  // A single selected, resizable shape gets resize handles — but only with the
+  // select tool active, so a handle-click can't be mistaken for placing a new
+  // shape. Text is sized via its font controls, so it's excluded.
   const soleId = selectedIds.size === 1 ? [...selectedIds][0] : null;
-  const resizeTarget = soleId
-    ? ordered.find((s) => s.id === soleId && s.type !== 'text')
-    : undefined;
-  const resizeBounds = editable && resizeTarget ? boundsOf(resizeTarget) : null;
+  const resizeTarget =
+    editable && tool === 'select' && soleId
+      ? ordered.find((s) => s.id === soleId && s.type !== 'text')
+      : undefined;
+  const resizeBounds = resizeTarget ? boundsOf(resizeTarget) : null;
 
   const surfaceRef = useRef<HTMLDivElement>(null);
   const gestureRef = useRef<Gesture | null>(null);
