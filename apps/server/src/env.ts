@@ -20,6 +20,10 @@ const envSchema = z.object({
   // Absolute path to the built web client to serve as static files. When unset,
   // the server runs ws-only (the Vite dev server serves the client in dev).
   WEB_DIST: z.string().optional(),
+  // Postgres connection string for durable board persistence. When unset the
+  // server keeps rooms in memory only (zero-config local dev); set it to make
+  // boards survive restarts and empty rooms.
+  DATABASE_URL: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

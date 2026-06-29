@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { WebSocketServer } from 'ws';
+import { ensureSchema } from '~/db/client.ts';
 import { env } from '~/env.ts';
 import { getRoomSnapshot, getStats, setupWSConnection } from '~/yjs.ts';
 
@@ -19,6 +20,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     disableRequestLogging: env.NODE_ENV === 'test',
   });
 
+  // Bootstrap durable storage (no-op when DATABASE_URL is unset).
+  await ensureSchema();
+
   app.get('/api/health', async () => ({ status: 'ok', ...getStats() }));
 
   // Read-only snapshot of a live room — proves the server understands the same
@@ -34,7 +38,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   wss.on('connection', (socket, request) => {
     const path = (request.url ?? '').split('?')[0];
     const room = decodeURIComponent(path.slice(WS_PREFIX.length)) || 'default';
-    setupWSConnection(socket, request, room);
+    setupWSConnection(socket, request, room).catch((err) => {
+      app.log.error(err, 'failed to set up ws connection');
+      socket.close();
+    });
   });
 
   app.server.on('upgrade', (request, socket, head) => {
