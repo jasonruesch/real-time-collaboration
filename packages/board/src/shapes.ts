@@ -96,6 +96,27 @@ export function pointsToPath(points: number[]): string {
   return d;
 }
 
+/**
+ * Resize a shape from one bounding box to another (immutable). Box shapes take
+ * the new x/y/w/h; freehand paths scale their points; text scales its font size
+ * by the vertical ratio (its width follows content).
+ */
+export function resizeShape(shape: Shape, from: Bounds, to: Bounds): Shape {
+  if (shape.type === 'path') {
+    const sx = from.w ? to.w / from.w : 1;
+    const sy = from.h ? to.h / from.h : 1;
+    const points = shape.points.map((v, i) =>
+      i % 2 === 0 ? to.x + (v - from.x) * sx : to.y + (v - from.y) * sy,
+    );
+    return { ...shape, points, x: to.x, y: to.y };
+  }
+  if (shape.type === 'text') {
+    const sy = from.h ? to.h / from.h : 1;
+    return { ...shape, x: to.x, y: to.y, fontSize: Math.max(6, Math.round(shape.fontSize * sy)) };
+  }
+  return { ...shape, x: to.x, y: to.y, w: to.w, h: to.h };
+}
+
 /** Translate a shape by (dx, dy), returning a new shape (never mutates). */
 export function moveShape(shape: Shape, dx: number, dy: number): Shape {
   if (shape.type === 'path') {
