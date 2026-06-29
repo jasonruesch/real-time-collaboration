@@ -7,6 +7,12 @@ import { WebSocket } from 'ws';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
+import {
+  PERSISTENCE_ORIGIN,
+  flushSave,
+  loadDoc,
+  scheduleSave,
+} from '~/persistence.ts';
 
 /**
  * In-memory Yjs sync server. This is a TypeScript port of the canonical
@@ -27,6 +33,8 @@ class SharedDoc extends Y.Doc {
   /** Each connection → the set of awareness client ids it controls. */
   conns = new Map<WebSocket, Set<number>>();
   awareness: awarenessProtocol.Awareness;
+  /** Resolves once any persisted snapshot has been loaded into the doc. */
+  whenLoaded: Promise<void> = Promise.resolve();
 
   constructor(name: string) {
     super({ gc: true });
@@ -59,13 +67,15 @@ class SharedDoc extends Y.Doc {
       },
     );
 
-    this.on('update', (update: Uint8Array, _origin: unknown, doc: Y.Doc) => {
+    this.on('update', (update: Uint8Array, origin: unknown, doc: Y.Doc) => {
       const shared = doc as SharedDoc;
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
       syncProtocol.writeUpdate(encoder, update);
       const buf = encoding.toUint8Array(encoder);
       shared.conns.forEach((_, c) => send(shared, c, buf));
+      // Persist real edits, but not the snapshot we just loaded from storage.
+      if (origin !== PERSISTENCE_ORIGIN) scheduleSave(shared.name, shared);
     });
   }
 }
@@ -73,7 +83,12 @@ class SharedDoc extends Y.Doc {
 const docs = new Map<string, SharedDoc>();
 
 function getYDoc(docName: string): SharedDoc {
-  return map.setIfUndefined(docs, docName, () => new SharedDoc(docName));
+  return map.setIfUndefined(docs, docName, () => {
+    const doc = new SharedDoc(docName);
+    // Kick off the load now; setupWSConnection awaits this before handshaking.
+    doc.whenLoaded = loadDoc(docName, doc);
+    return doc;
+  });
 }
 
 function send(doc: SharedDoc, conn: WebSocket, message: Uint8Array): void {
@@ -93,8 +108,10 @@ function closeConn(doc: SharedDoc, conn: WebSocket): void {
   if (controlled !== undefined) {
     doc.conns.delete(conn);
     awarenessProtocol.removeAwarenessStates(doc.awareness, Array.from(controlled), null);
-    // Drop empty rooms so memory tracks live usage.
+    // Drop empty rooms so memory tracks live usage. Flush a final snapshot first
+    // (flushSave encodes synchronously, so destroying right after is safe).
     if (doc.conns.size === 0) {
+      void flushSave(doc.name, doc);
       doc.destroy();
       docs.delete(doc.name);
     }
@@ -130,13 +147,15 @@ function onMessage(conn: WebSocket, doc: SharedDoc, message: Uint8Array): void {
 }
 
 /** Wire a freshly-upgraded WebSocket into its room and run the sync handshake. */
-export function setupWSConnection(
+export async function setupWSConnection(
   conn: WebSocket,
   _req: IncomingMessage,
   roomName: string,
-): void {
+): Promise<void> {
   conn.binaryType = 'arraybuffer';
   const doc = getYDoc(roomName);
+  // Wait for any persisted snapshot to load so the handshake reflects it.
+  await doc.whenLoaded;
   doc.conns.set(conn, new Set());
 
   conn.on('message', (message: ArrayBuffer) =>
