@@ -10,7 +10,6 @@ import {
   nextZ,
   normalizeRect,
   pointsToPath,
-  shapeBounds,
   sortByZ,
 } from '@coalesce/board';
 import { Spinner } from '@jasonruesch/react';
@@ -28,6 +27,7 @@ import { CursorsLayer } from '~/components/cursors-layer';
 import { Toolbar, type TextStyle, type Tool } from '~/components/toolbar';
 import { roleFromToken, userSeed } from '~/lib/auth';
 import { downloadPng, downloadSvg } from '~/lib/export';
+import { boundsOf } from '~/lib/measure';
 import { useComments } from '~/lib/use-comments';
 import { makeUser } from '~/lib/use-local-user';
 import { usePresence } from '~/lib/use-presence';
@@ -483,7 +483,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     if (tool === 'select') {
       // Topmost shape under the pointer wins (highest stacking order).
       const hit = [...ordered].reverse().find((s) => {
-        const b = shapeBounds(s);
+        const b = boundsOf(s);
         return x >= b.x - 6 && x <= b.x + b.w + 6 && y >= b.y - 6 && y <= b.y + b.h + 6;
       });
       if (hit) {
@@ -640,7 +640,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     } else if (g.kind === 'marquee') {
       const box = normalizeRect(g.startX, g.startY, g.curX, g.curY);
       const hitIds = ordered
-        .filter((s) => rectsIntersect(shapeBounds(s), box))
+        .filter((s) => rectsIntersect(boundsOf(s), box))
         .map((s) => s.id);
       setSelectedIds((prev) =>
         g.additive ? new Set([...prev, ...hitIds]) : new Set(hitIds),
@@ -755,7 +755,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
                 p.selection!.map((id) => {
                   const s = shapeList.find((sh) => sh.id === id);
                   if (!s) return null;
-                  const bb = shapeBounds(s);
+                  const bb = boundsOf(s);
                   return (
                     <rect
                       key={`${p.clientId}-${id}`}
@@ -894,7 +894,7 @@ function ShapeView({
   onChangeText: (id: string, text: string) => void;
   onCloseEdit: (id: string) => void;
 }) {
-  const b = shapeBounds(shape);
+  const b = boundsOf(shape);
   return (
     <g>
       {shape.type === 'rect' && (
@@ -937,8 +937,8 @@ function ShapeView({
           <foreignObject
             x={shape.x}
             y={shape.y}
-            width={Math.max(b.w + 80, 160)}
-            height={Math.max(b.h + 16, shape.fontSize * 2)}
+            width={Math.max(b.w + shape.fontSize, 60)}
+            height={Math.max(b.h + 8, shape.fontSize * 1.6)}
           >
             <InlineEditor
               value={shape.text}

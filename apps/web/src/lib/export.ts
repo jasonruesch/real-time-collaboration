@@ -1,11 +1,5 @@
-import {
-  type Bounds,
-  FONT_STACKS,
-  type Shape,
-  TEXT_LINE_HEIGHT,
-  pointsToPath,
-  shapeBounds,
-} from '@coalesce/board';
+import { type Bounds, FONT_STACKS, type Shape, TEXT_LINE_HEIGHT, pointsToPath } from '@coalesce/board';
+import { boundsOf } from '~/lib/measure';
 
 /**
  * Export shapes to a self-contained SVG (and PNG via canvas). Notes are
@@ -31,7 +25,7 @@ function unionBounds(shapes: Shape[]): Bounds {
   let maxX = -Infinity;
   let maxY = -Infinity;
   for (const s of shapes) {
-    const b = shapeBounds(s);
+    const b = boundsOf(s);
     minX = Math.min(minX, b.x);
     minY = Math.min(minY, b.y);
     maxX = Math.max(maxX, b.x + b.w);
