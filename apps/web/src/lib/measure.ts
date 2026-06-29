@@ -9,24 +9,64 @@ import {
 /**
  * Accurate client-side bounds. For text shapes the shared `shapeBounds` only
  * estimates width from an average glyph width, which over-pads proportional
- * text; here we measure the real rendered width with a canvas 2D context so the
- * selection box, hit area, and export frame hug the glyphs. Non-text shapes
- * defer to the shared geometry. Falls back to the estimate if no canvas exists.
+ * text. Here we measure the real width by laying the text out in a hidden DOM
+ * span with the *same* CSS font — so the result matches exactly how the SVG
+ * <text> renders, including system fonts like `system-ui` (SF Pro on macOS)
+ * that canvas `measureText` resolves differently. Non-text shapes defer to the
+ * shared geometry; falls back to the estimate when there's no DOM.
  */
 
-let ctx: CanvasRenderingContext2D | null | undefined;
-function measureCtx(): CanvasRenderingContext2D | null {
-  if (ctx === undefined) ctx = document.createElement('canvas').getContext('2d');
-  return ctx;
+let span: HTMLSpanElement | null | undefined;
+function measureSpan(): HTMLSpanElement | null {
+  if (span === undefined) {
+    if (typeof document === 'undefined') {
+      span = null;
+    } else {
+      span = document.createElement('span');
+      Object.assign(span.style, {
+        position: 'absolute',
+        left: '-99999px',
+        top: '0',
+        visibility: 'hidden',
+        whiteSpace: 'pre',
+        pointerEvents: 'none',
+      });
+      document.body.appendChild(span);
+    }
+  }
+  return span;
 }
+
+// Cache measured line widths; keyed by the font properties + the line text.
+const cache = new Map<string, number>();
 
 export function boundsOf(shape: Shape): Bounds {
   if (shape.type !== 'text') return shapeBounds(shape);
-  const c = measureCtx();
-  if (!c) return shapeBounds(shape);
-  c.font = `${shape.italic ? 'italic ' : ''}${shape.bold ? '700' : '400'} ${shape.fontSize}px ${FONT_STACKS[shape.fontFamily]}`;
+  const el = measureSpan();
+  if (!el) return shapeBounds(shape);
+
+  const family = FONT_STACKS[shape.fontFamily];
+  const weight = shape.bold ? '700' : '400';
+  const style = shape.italic ? 'italic' : 'normal';
   const lines = (shape.text || ' ').split('\n');
-  const w = Math.max(8, ...lines.map((l) => c.measureText(l || ' ').width));
+
+  let w = 8;
+  for (const line of lines) {
+    const text = line || ' ';
+    const key = `${shape.fontFamily}|${shape.fontSize}|${weight}|${style}|${text}`;
+    let lineW = cache.get(key);
+    if (lineW === undefined) {
+      el.style.fontFamily = family;
+      el.style.fontSize = `${shape.fontSize}px`;
+      el.style.fontWeight = weight;
+      el.style.fontStyle = style;
+      el.textContent = text;
+      lineW = el.getBoundingClientRect().width;
+      cache.set(key, lineW);
+    }
+    w = Math.max(w, lineW);
+  }
+
   const lineHeight = shape.fontSize * TEXT_LINE_HEIGHT;
   return { x: shape.x, y: shape.y, w, h: Math.max(lineHeight, lines.length * lineHeight) };
 }
