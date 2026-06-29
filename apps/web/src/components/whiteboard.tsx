@@ -2,9 +2,11 @@ import {
   type Shape,
   canEdit,
   moveShape,
+  nextZ,
   normalizeRect,
   pointsToPath,
   shapeBounds,
+  sortByZ,
 } from '@coalesce/board';
 import { Spinner } from '@jasonruesch/react';
 import {
@@ -25,12 +27,24 @@ import { useShapes } from '~/lib/use-shapes';
 const NOTE_W = 168;
 const NOTE_H = 128;
 const MIN_DRAG = 4;
+const MIN_SCALE = 0.2;
+const MAX_SCALE = 5;
+
+/** Pan + zoom of the board relative to the screen. */
+interface Viewport {
+  x: number;
+  y: number;
+  scale: number;
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** An in-progress pointer gesture, kept in a ref so it never goes stale. */
 type Gesture =
   | { kind: 'create'; id: string; startX: number; startY: number }
   | { kind: 'pen'; id: string; points: number[] }
-  | { kind: 'move'; id: string; startX: number; startY: number; orig: Shape };
+  | { kind: 'move'; id: string; startX: number; startY: number; orig: Shape }
+  | { kind: 'pan'; startSX: number; startSY: number; origX: number; origY: number };
 
 export function Whiteboard({ roomId, token }: { roomId: string; token?: string | null }) {
   const role = roleFromToken(token ?? null);
@@ -42,9 +56,19 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   const [tool, setTool] = useState<Tool>('select');
   const [color, setColor] = useState<string>('#6366f1');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
+  const [spaceHeld, setSpaceHeld] = useState(false);
+
+  // Shapes painted bottom-to-top by stacking order.
+  const ordered = sortByZ(shapeList);
 
   const surfaceRef = useRef<HTMLDivElement>(null);
   const gestureRef = useRef<Gesture | null>(null);
+  // Mirror viewport in a ref so gesture handlers read the latest without re-binding.
+  const viewportRef = useRef(viewport);
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
 
   // Coalesce rapid pointer writes to one per animation frame.
   const rafRef = useRef<number | null>(null);
@@ -80,9 +104,60 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
   }, []);
 
+  // Screen → board coordinates, inverting the current pan/zoom. Every gesture
+  // funnels through here, so this is the one place the transform is undone.
   const toBoard = useCallback((e: ReactPointerEvent): { x: number; y: number } => {
     const rect = surfaceRef.current!.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const v = viewportRef.current;
+    return {
+      x: (e.clientX - rect.left - v.x) / v.scale,
+      y: (e.clientY - rect.top - v.y) / v.scale,
+    };
+  }, []);
+
+  // Wheel = pan; ⌘/ctrl+wheel (and trackpad pinch) = zoom toward the cursor.
+  // Bound natively as non-passive so preventDefault stops the page from scrolling.
+  useEffect(() => {
+    const el = surfaceRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      setViewport((v) => {
+        if (e.ctrlKey || e.metaKey) {
+          const scale = clamp(v.scale * Math.exp(-e.deltaY * 0.01), MIN_SCALE, MAX_SCALE);
+          const bx = (sx - v.x) / v.scale;
+          const by = (sy - v.y) / v.scale;
+          return { scale, x: sx - bx * scale, y: sy - by * scale };
+        }
+        return { ...v, x: v.x - e.deltaX, y: v.y - e.deltaY };
+      });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Hold space to pan with the left button (also available via middle-drag).
+  useEffect(() => {
+    const isField = (t: EventTarget | null) =>
+      t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
+    const down = (e: KeyboardEvent) => {
+      if (e.key === ' ' && !isField(e.target)) {
+        e.preventDefault();
+        setSpaceHeld(true);
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === ' ') setSpaceHeld(false);
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+    };
   }, []);
 
   const deleteSelected = useCallback(() => {
@@ -105,13 +180,27 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   }, [deleteSelected]);
 
   function onPointerDown(e: ReactPointerEvent) {
-    if (!room || e.button !== 0) return;
-    const { x, y } = toBoard(e);
+    if (!room) return;
     (e.target as Element).setPointerCapture(e.pointerId);
 
+    // Pan: middle button, or left button while space is held.
+    if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+      const v = viewportRef.current;
+      gestureRef.current = {
+        kind: 'pan',
+        startSX: e.clientX,
+        startSY: e.clientY,
+        origX: v.x,
+        origY: v.y,
+      };
+      return;
+    }
+    if (e.button !== 0) return;
+    const { x, y } = toBoard(e);
+
     if (tool === 'select') {
-      // Topmost shape under the pointer wins.
-      const hit = [...shapeList].reverse().find((s) => {
+      // Topmost shape under the pointer wins (highest stacking order).
+      const hit = [...ordered].reverse().find((s) => {
         const b = shapeBounds(s);
         return x >= b.x - 6 && x <= b.x + b.w + 6 && y >= b.y - 6 && y <= b.y + b.h + 6;
       });
@@ -131,7 +220,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     if (!editable) return;
 
     const id = crypto.randomUUID();
-    const base = { id, color, author: selfId, x, y };
+    const base = { id, color, author: selfId, x, y, z: nextZ(shapeList) };
 
     if (tool === 'note') {
       const text = window.prompt('Note text', '') ?? '';
@@ -152,10 +241,21 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
 
   function onPointerMove(e: ReactPointerEvent) {
     if (!room) return;
+
+    const g = gestureRef.current;
+    if (g?.kind === 'pan') {
+      // Pan tracks raw screen movement, independent of zoom.
+      setViewport((v) => ({
+        ...v,
+        x: g.origX + (e.clientX - g.startSX),
+        y: g.origY + (e.clientY - g.startSY),
+      }));
+      return;
+    }
+
     const { x, y } = toBoard(e);
     room.awareness.setLocalStateField('cursor', { x, y });
 
-    const g = gestureRef.current;
     if (!g) return;
 
     if (g.kind === 'create') {
@@ -229,23 +329,30 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
       >
         <svg
           className="absolute inset-0 size-full"
-          style={{ cursor: tool === 'select' ? 'default' : 'crosshair' }}
+          style={{
+            cursor: spaceHeld ? 'grab' : tool === 'select' ? 'default' : 'crosshair',
+          }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endGesture}
           onPointerCancel={endGesture}
           onPointerLeave={() => room.awareness.setLocalStateField('cursor', null)}
         >
-          {shapeList.map((shape) => (
-            <ShapeView
-              key={shape.id}
-              shape={shape}
-              selected={shape.id === selectedId}
-              onEditNote={editNote}
-            />
-          ))}
+          <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
+            {ordered.map((shape) => (
+              <ShapeView
+                key={shape.id}
+                shape={shape}
+                selected={shape.id === selectedId}
+                onEditNote={editNote}
+              />
+            ))}
+          </g>
         </svg>
-        <CursorsLayer peers={peers.filter((p) => p.clientId !== selfId)} />
+        <CursorsLayer
+          peers={peers.filter((p) => p.clientId !== selfId)}
+          viewport={viewport}
+        />
       </div>
     </div>
   );
@@ -320,6 +427,7 @@ function ShapeView({
           stroke="var(--color-accent, #6366f1)"
           strokeWidth={1.5}
           strokeDasharray="4 4"
+          vectorEffect="non-scaling-stroke"
           pointerEvents="none"
         />
       )}

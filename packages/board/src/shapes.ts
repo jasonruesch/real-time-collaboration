@@ -80,3 +80,27 @@ export function moveShape(shape: Shape, dx: number, dy: number): Shape {
 export function colorFor(clientId: number): string {
   return PALETTE[Math.abs(clientId) % PALETTE.length];
 }
+
+/** A shape's stacking order, defaulting to 0 for shapes created before z existed. */
+export function zOf(shape: Shape): number {
+  return shape.z ?? 0;
+}
+
+/** The next stacking order above everything currently on the board. */
+export function nextZ(shapes: Shape[]): number {
+  let max = 0;
+  for (const s of shapes) max = Math.max(max, zOf(s));
+  return max + 1;
+}
+
+/** The lowest stacking order, minus one — for sending a shape to the back. */
+export function backZ(shapes: Shape[]): number {
+  let min = 0;
+  for (const s of shapes) min = Math.min(min, zOf(s));
+  return min - 1;
+}
+
+/** Shapes sorted bottom-to-top by stacking order (stable for equal z). */
+export function sortByZ(shapes: Shape[]): Shape[] {
+  return [...shapes].sort((a, b) => zOf(a) - zOf(b));
+}
