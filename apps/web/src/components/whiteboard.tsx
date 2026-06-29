@@ -1,5 +1,7 @@
 import {
+  type Bounds,
   type Shape,
+  backZ,
   canEdit,
   moveShape,
   nextZ,
@@ -29,6 +31,7 @@ const NOTE_H = 128;
 const MIN_DRAG = 4;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 5;
+const PASTE_OFFSET = 20;
 
 /** Pan + zoom of the board relative to the screen. */
 interface Viewport {
@@ -39,11 +42,17 @@ interface Viewport {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/** Whether two axis-aligned boxes overlap (used by marquee selection). */
+function rectsIntersect(a: Bounds, b: Bounds): boolean {
+  return a.x <= b.x + b.w && a.x + a.w >= b.x && a.y <= b.y + b.h && a.y + a.h >= b.y;
+}
+
 /** An in-progress pointer gesture, kept in a ref so it never goes stale. */
 type Gesture =
   | { kind: 'create'; id: string; startX: number; startY: number }
   | { kind: 'pen'; id: string; points: number[] }
-  | { kind: 'move'; id: string; startX: number; startY: number; orig: Shape }
+  | { kind: 'move'; startX: number; startY: number; orig: Shape[] }
+  | { kind: 'marquee'; startX: number; startY: number; curX: number; curY: number; additive: boolean }
   | { kind: 'pan'; startSX: number; startSY: number; origX: number; origY: number };
 
 export function Whiteboard({ roomId, token }: { roomId: string; token?: string | null }) {
@@ -55,15 +64,20 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
 
   const [tool, setTool] = useState<Tool>('select');
   const [color, setColor] = useState<string>('#6366f1');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [marquee, setMarquee] = useState<Bounds | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
   const [spaceHeld, setSpaceHeld] = useState(false);
+  const [undoState, setUndoState] = useState({ canUndo: false, canRedo: false });
 
   // Shapes painted bottom-to-top by stacking order.
   const ordered = sortByZ(shapeList);
 
   const surfaceRef = useRef<HTMLDivElement>(null);
   const gestureRef = useRef<Gesture | null>(null);
+  // A local clipboard of copied shapes (survives within the tab/session).
+  const clipboardRef = useRef<Shape[]>([]);
   // Mirror viewport in a ref so gesture handlers read the latest without re-binding.
   const viewportRef = useRef(viewport);
   useEffect(() => {
@@ -104,6 +118,22 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
   }, []);
 
+  // Track undo/redo availability for the toolbar buttons.
+  useEffect(() => {
+    if (!room) return;
+    const um = room.undoManager;
+    const update = () => setUndoState({ canUndo: um.canUndo(), canRedo: um.canRedo() });
+    update();
+    um.on('stack-item-added', update);
+    um.on('stack-item-popped', update);
+    um.on('stack-cleared', update);
+    return () => {
+      um.off('stack-item-added', update);
+      um.off('stack-item-popped', update);
+      um.off('stack-cleared', update);
+    };
+  }, [room]);
+
   // Screen → board coordinates, inverting the current pan/zoom. Every gesture
   // funnels through here, so this is the one place the transform is undone.
   const toBoard = useCallback((e: ReactPointerEvent): { x: number; y: number } => {
@@ -137,7 +167,9 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, []);
+    // Re-run once the board surface exists (it's absent on the initial
+    // pre-connection render, when room is still null).
+  }, [room]);
 
   // Hold space to pan with the left button (also available via middle-drag).
   useEffect(() => {
@@ -160,28 +192,108 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     };
   }, []);
 
-  const deleteSelected = useCallback(() => {
-    if (room && selectedId && editable) {
-      room.shapes.delete(selectedId);
-      setSelectedId(null);
-    }
-  }, [room, selectedId, editable]);
+  // ---- Mutations (all gated on edit access; all undoable as one step) --------
 
-  // Delete/Backspace removes the selection (unless typing in a field).
+  const deleteSelected = useCallback(() => {
+    if (!room || !editable || selectedIds.size === 0) return;
+    room.doc.transact(() => selectedIds.forEach((id) => room.shapes.delete(id)));
+    setSelectedIds(new Set());
+  }, [room, editable, selectedIds]);
+
+  const undo = useCallback(() => room?.undoManager.undo(), [room]);
+  const redo = useCallback(() => room?.undoManager.redo(), [room]);
+
+  // Stamp copies with fresh ids, a small offset, this author, and new top z.
+  const placeCopies = useCallback(
+    (src: Shape[]) => {
+      if (!room || !editable || src.length === 0) return;
+      const baseZ = nextZ(shapeList);
+      const ids: string[] = [];
+      room.doc.transact(() => {
+        sortByZ(src).forEach((s, i) => {
+          const id = crypto.randomUUID();
+          ids.push(id);
+          room.shapes.set(id, {
+            ...moveShape(s, PASTE_OFFSET, PASTE_OFFSET),
+            id,
+            author: selfId,
+            z: baseZ + i,
+          });
+        });
+      });
+      setSelectedIds(new Set(ids));
+    },
+    [room, editable, shapeList, selfId],
+  );
+
+  const selectedShapes = useCallback(
+    () => ordered.filter((s) => selectedIds.has(s.id)),
+    [ordered, selectedIds],
+  );
+
+  const copy = useCallback(() => {
+    const sel = selectedShapes();
+    if (sel.length === 0) return;
+    clipboardRef.current = sel.map((s) => structuredClone(s));
+    void navigator.clipboard?.writeText(JSON.stringify(clipboardRef.current)).catch(() => {});
+  }, [selectedShapes]);
+
+  const paste = useCallback(() => placeCopies(clipboardRef.current), [placeCopies]);
+  const duplicate = useCallback(() => placeCopies(selectedShapes()), [placeCopies, selectedShapes]);
+
+  const bringToFront = useCallback(() => {
+    if (!room || !editable) return;
+    let z = nextZ(shapeList);
+    room.doc.transact(() =>
+      selectedShapes().forEach((s) => room.shapes.set(s.id, { ...s, z: z++ })),
+    );
+  }, [room, editable, shapeList, selectedShapes]);
+
+  const sendToBack = useCallback(() => {
+    if (!room || !editable) return;
+    let z = backZ(shapeList);
+    // Iterate top-to-bottom so relative order is preserved beneath everything.
+    [...selectedShapes()].reverse().forEach((s) => {
+      room.doc.transact(() => room.shapes.set(s.id, { ...s, z: z-- }));
+    });
+  }, [room, editable, shapeList, selectedShapes]);
+
+  // Keyboard shortcuts: delete, undo/redo, copy/paste/duplicate.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-      deleteSelected();
+      const t = e.target as HTMLElement;
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
+        e.preventDefault();
+        deleteSelected();
+      } else if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      } else if (mod && e.key.toLowerCase() === 'c') {
+        copy();
+      } else if (mod && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        paste();
+      } else if (mod && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        duplicate();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [deleteSelected]);
+  }, [deleteSelected, undo, redo, copy, paste, duplicate]);
+
+  // ---- Pointer handling -----------------------------------------------------
 
   function onPointerDown(e: ReactPointerEvent) {
     if (!room) return;
     (e.target as Element).setPointerCapture(e.pointerId);
+    setEditingId(null);
 
     // Pan: middle button, or left button while space is held.
     if (e.button === 1 || (e.button === 0 && spaceHeld)) {
@@ -205,13 +317,35 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
         return x >= b.x - 6 && x <= b.x + b.w + 6 && y >= b.y - 6 && y <= b.y + b.h + 6;
       });
       if (hit) {
-        setSelectedId(hit.id);
-        // Viewers may select (to inspect) but not move.
+        if (e.shiftKey) {
+          // Toggle membership; don't start a move.
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(hit.id)) next.delete(hit.id);
+            else next.add(hit.id);
+            return next;
+          });
+          return;
+        }
+        const ids = selectedIds.has(hit.id) ? [...selectedIds] : [hit.id];
+        if (!selectedIds.has(hit.id)) setSelectedIds(new Set([hit.id]));
         if (editable) {
-          gestureRef.current = { kind: 'move', id: hit.id, startX: x, startY: y, orig: hit };
+          const orig = ids
+            .map((id) => room.shapes.get(id))
+            .filter((s): s is Shape => s != null);
+          gestureRef.current = { kind: 'move', startX: x, startY: y, orig };
         }
       } else {
-        setSelectedId(null);
+        if (!e.shiftKey) setSelectedIds(new Set());
+        gestureRef.current = {
+          kind: 'marquee',
+          startX: x,
+          startY: y,
+          curX: x,
+          curY: y,
+          additive: e.shiftKey,
+        };
+        setMarquee({ x, y, w: 0, h: 0 });
       }
       return;
     }
@@ -223,9 +357,9 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     const base = { id, color, author: selfId, x, y, z: nextZ(shapeList) };
 
     if (tool === 'note') {
-      const text = window.prompt('Note text', '') ?? '';
-      room.shapes.set(id, { ...base, type: 'note', w: NOTE_W, h: NOTE_H, text });
-      setSelectedId(id);
+      room.shapes.set(id, { ...base, type: 'note', w: NOTE_W, h: NOTE_H, text: '' });
+      setSelectedIds(new Set([id]));
+      setEditingId(id); // open the inline editor immediately
       setTool('select');
       return;
     }
@@ -271,9 +405,19 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
       if (prev && prev.type === 'path') {
         scheduleWrite(() => room.shapes.set(g.id, { ...prev, points }));
       }
+    } else if (g.kind === 'marquee') {
+      g.curX = x;
+      g.curY = y;
+      setMarquee(normalizeRect(g.startX, g.startY, x, y));
     } else {
-      const next = moveShape(g.orig, x - g.startX, y - g.startY);
-      scheduleWrite(() => room.shapes.set(g.id, next));
+      // Move every selected shape by the same delta, as one undoable step.
+      const dx = x - g.startX;
+      const dy = y - g.startY;
+      scheduleWrite(() =>
+        room.doc.transact(() =>
+          g.orig.forEach((s) => room.shapes.set(s.id, moveShape(s, dx, dy))),
+        ),
+      );
     }
   }
 
@@ -282,21 +426,32 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     gestureRef.current = null;
     if (!g || !room) return;
     flushWrite();
-    // Discard an accidental click (zero-size rect/ellipse).
+
     if (g.kind === 'create') {
+      // Discard an accidental click (zero-size rect/ellipse).
       const shape = room.shapes.get(g.id);
       if (shape && 'w' in shape && shape.w < MIN_DRAG && shape.h < MIN_DRAG) {
         room.shapes.delete(g.id);
       } else {
-        setSelectedId(g.id);
+        setSelectedIds(new Set([g.id]));
       }
+    } else if (g.kind === 'marquee') {
+      const box = normalizeRect(g.startX, g.startY, g.curX, g.curY);
+      const hitIds = ordered
+        .filter((s) => rectsIntersect(shapeBounds(s), box))
+        .map((s) => s.id);
+      setSelectedIds((prev) =>
+        g.additive ? new Set([...prev, ...hitIds]) : new Set(hitIds),
+      );
+      setMarquee(null);
     }
   }
 
-  function editNote(shape: Shape) {
-    if (shape.type !== 'note' || !room || !editable) return;
-    const text = window.prompt('Note text', shape.text);
-    if (text != null) room.shapes.set(shape.id, { ...shape, text });
+  function commitText(id: string, text: string) {
+    if (!room || !editable) return;
+    const shape = room.shapes.get(id);
+    if (shape && shape.type === 'note') room.shapes.set(id, { ...shape, text });
+    setEditingId(null);
   }
 
   if (!room) {
@@ -314,9 +469,15 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
         onToolChange={setTool}
         color={color}
         onColorChange={setColor}
-        hasSelection={selectedId != null}
+        hasSelection={selectedIds.size > 0}
         onDeleteSelected={deleteSelected}
         onClear={() => editable && room.shapes.clear()}
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={undoState.canUndo}
+        canRedo={undoState.canRedo}
+        onBringToFront={bringToFront}
+        onSendToBack={sendToBack}
         status={status}
         peers={peers}
         selfId={selfId}
@@ -343,10 +504,28 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
               <ShapeView
                 key={shape.id}
                 shape={shape}
-                selected={shape.id === selectedId}
-                onEditNote={editNote}
+                selected={selectedIds.has(shape.id)}
+                editing={editingId === shape.id}
+                editable={editable}
+                onStartEdit={() => editable && setEditingId(shape.id)}
+                onCommitText={commitText}
               />
             ))}
+            {marquee && (
+              <rect
+                x={marquee.x}
+                y={marquee.y}
+                width={marquee.w}
+                height={marquee.h}
+                fill="var(--color-accent, #6366f1)"
+                fillOpacity={0.08}
+                stroke="var(--color-accent, #6366f1)"
+                strokeWidth={1}
+                strokeDasharray="4 4"
+                vectorEffect="non-scaling-stroke"
+                pointerEvents="none"
+              />
+            )}
           </g>
         </svg>
         <CursorsLayer
@@ -361,11 +540,17 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
 function ShapeView({
   shape,
   selected,
-  onEditNote,
+  editing,
+  editable,
+  onStartEdit,
+  onCommitText,
 }: {
   shape: Shape;
   selected: boolean;
-  onEditNote: (shape: Shape) => void;
+  editing: boolean;
+  editable: boolean;
+  onStartEdit: () => void;
+  onCommitText: (id: string, text: string) => void;
 }) {
   const b = shapeBounds(shape);
   return (
@@ -407,14 +592,28 @@ function ShapeView({
       )}
       {shape.type === 'note' && (
         <foreignObject x={shape.x} y={shape.y} width={shape.w} height={shape.h}>
-          <div
-            onDoubleClick={() => onEditNote(shape)}
-            className="size-full overflow-hidden rounded-md p-2 text-sm text-black shadow-md"
-            style={{ backgroundColor: shape.color }}
-            title="Double-click to edit"
-          >
-            {shape.text || 'Double-click to edit'}
-          </div>
+          {editing ? (
+            <textarea
+              autoFocus
+              defaultValue={shape.text}
+              onPointerDown={(e) => e.stopPropagation()}
+              onBlur={(e) => onCommitText(shape.id, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur();
+              }}
+              className="size-full resize-none rounded-md border-none p-2 text-sm text-black shadow-md outline-none"
+              style={{ backgroundColor: shape.color }}
+            />
+          ) : (
+            <div
+              onDoubleClick={onStartEdit}
+              className="size-full overflow-hidden rounded-md p-2 text-sm text-black shadow-md"
+              style={{ backgroundColor: shape.color }}
+              title={editable ? 'Double-click to edit' : undefined}
+            >
+              {shape.text || (editable ? 'Double-click to edit' : '')}
+            </div>
+          )}
         </foreignObject>
       )}
       {selected && (

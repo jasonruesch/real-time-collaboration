@@ -12,15 +12,19 @@ import {
   TooltipTrigger,
 } from '@jasonruesch/react';
 import {
+  BringToFront,
   Check,
   Circle,
   Eye,
   MousePointer2,
   Pencil,
+  Redo2,
+  SendToBack,
   Share2,
   Square,
   StickyNote,
   Trash2,
+  Undo2,
 } from 'lucide-react';
 import { type ComponentType, useState } from 'react';
 import { PresenceBar } from '~/components/presence-bar';
@@ -52,6 +56,12 @@ export interface ToolbarProps {
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onClear: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onBringToFront: () => void;
+  onSendToBack: () => void;
   status: ConnectionStatus;
   peers: Peer[];
   selfId: number;
@@ -135,6 +145,61 @@ export function Toolbar(props: ToolbarProps) {
           </div>
 
           <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <IconButton
+                  variant="ghost"
+                  aria-label="Undo"
+                  disabled={!props.canUndo}
+                  onClick={props.onUndo}
+                >
+                  <Undo2 size={18} />
+                </IconButton>
+              </TooltipTrigger>
+              <TooltipContent>Undo (⌘Z)</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <IconButton
+                  variant="ghost"
+                  aria-label="Redo"
+                  disabled={!props.canRedo}
+                  onClick={props.onRedo}
+                >
+                  <Redo2 size={18} />
+                </IconButton>
+              </TooltipTrigger>
+              <TooltipContent>Redo (⇧⌘Z)</TooltipContent>
+            </Tooltip>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <IconButton
+                  variant="ghost"
+                  aria-label="Bring to front"
+                  disabled={!props.hasSelection}
+                  onClick={props.onBringToFront}
+                >
+                  <BringToFront size={18} />
+                </IconButton>
+              </TooltipTrigger>
+              <TooltipContent>Bring to front</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <IconButton
+                  variant="ghost"
+                  aria-label="Send to back"
+                  disabled={!props.hasSelection}
+                  onClick={props.onSendToBack}
+                >
+                  <SendToBack size={18} />
+                </IconButton>
+              </TooltipTrigger>
+              <TooltipContent>Send to back</TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <IconButton

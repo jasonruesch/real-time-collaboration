@@ -12,6 +12,8 @@ export interface Room {
   /** Shapes keyed by id — last-writer-wins per shape, conflict-free across peers. */
   shapes: Y.Map<Shape>;
   awareness: Awareness;
+  /** Per-user undo history — tracks only this client's local edits. */
+  undoManager: Y.UndoManager;
 }
 
 /** The same-origin WebSocket base; Vite proxies `/yjs` to the server in dev. */
@@ -40,12 +42,16 @@ export function useRoom(
       params: token ? { t: token } : {},
     });
     const shapes = doc.getMap<Shape>('shapes');
+    // Default trackedOrigins ({null}) captures this client's own edits while
+    // ignoring remote updates (which arrive tagged with the provider), giving
+    // per-user undo/redo for free.
+    const undoManager = new Y.UndoManager(shapes);
     // Instantiating a per-room external resource (Y.Doc + provider) in an effect
     // and exposing it via state is the StrictMode-safe pattern — the effect's
     // cleanup tears the old connection down before a new roomId re-runs it. The
     // one synchronous setState here is intentional, not a cascading-render bug.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setRoom({ doc, provider, shapes, awareness: provider.awareness });
+    setRoom({ doc, provider, shapes, awareness: provider.awareness, undoManager });
 
     const onStatus = (event: { status: ConnectionStatus }) =>
       setStatus(event.status);
@@ -53,6 +59,7 @@ export function useRoom(
 
     return () => {
       provider.off('status', onStatus);
+      undoManager.destroy();
       provider.destroy(); // disconnects and destroys the awareness instance
       doc.destroy();
       setRoom(null);
