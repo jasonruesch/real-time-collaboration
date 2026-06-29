@@ -15,6 +15,7 @@ import {
 } from '@coalesce/board';
 import { Spinner } from '@jasonruesch/react';
 import {
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
@@ -461,7 +462,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   function onPointerDown(e: ReactPointerEvent) {
     if (!room) return;
     (e.target as Element).setPointerCapture(e.pointerId);
-    setEditingId(null);
+    if (editingId) closeEditor(editingId);
 
     // Pan: middle button, or left button while space is held.
     if (e.button === 1 || (e.button === 0 && spaceHeld)) {
@@ -648,18 +649,22 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     }
   }
 
-  function commitText(id: string, text: string) {
-    if (!room || !editable) {
-      setEditingId(null);
-      return;
-    }
+  // Write note/text content to the doc on every keystroke, so it's never lost
+  // however editing ends — and so peers see typing live.
+  function updateTextLive(id: string, text: string) {
+    if (!room || !editable) return;
     const shape = room.shapes.get(id);
-    if (shape?.type === 'note') {
+    if (shape?.type === 'note' || shape?.type === 'text') {
       room.shapes.set(id, { ...shape, text });
-    } else if (shape?.type === 'text') {
-      // An emptied text element is discarded rather than left invisible.
-      if (text.trim() === '') room.shapes.delete(id);
-      else room.shapes.set(id, { ...shape, text });
+    }
+  }
+
+  // Close the editor; an empty text element (which would be invisible) is
+  // discarded. Empty notes are kept (they show a placeholder box).
+  function closeEditor(id: string) {
+    if (room && editable) {
+      const shape = room.shapes.get(id);
+      if (shape?.type === 'text' && shape.text.trim() === '') room.shapes.delete(id);
     }
     setEditingId(null);
   }
@@ -724,7 +729,8 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
                 editing={editingId === shape.id}
                 editable={editable}
                 onStartEdit={() => editable && setEditingId(shape.id)}
-                onCommitText={commitText}
+                onChangeText={updateTextLive}
+                onCloseEdit={closeEditor}
               />
             ))}
             {marquee && (
@@ -809,20 +815,84 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   );
 }
 
+/**
+ * A textarea for inline shape editing. Focus is driven by a ref-effect (which
+ * React re-runs across StrictMode's mount/unmount/remount, unlike the autoFocus
+ * prop), and the blur-commit is suppressed for a brief window after mount so the
+ * spurious blur from that churn (and flaky foreignObject autofocus) doesn't
+ * fire — which would otherwise commit empty text and discard a brand-new shape.
+ */
+function InlineEditor({
+  value,
+  className,
+  style,
+  onChange,
+  onClose,
+}: {
+  value: string;
+  className: string;
+  style: CSSProperties;
+  onChange: (text: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const ready = useRef(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Defer focus past the placing click's default action (which would otherwise
+    // pull focus to the body, since the SVG surface isn't focusable).
+    const raf = requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+    // Ignore the spurious blur from StrictMode mount/remount churn during this
+    // window; a real click-away happens well after it.
+    const t = setTimeout(() => {
+      ready.current = true;
+    }, 120);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t);
+    };
+  }, []);
+  return (
+    <textarea
+      ref={ref}
+      defaultValue={value}
+      onPointerDown={(e) => e.stopPropagation()}
+      onInput={(e) => onChange(e.currentTarget.value)}
+      onBlur={() => {
+        if (ready.current) onClose();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          ready.current = true;
+          onClose();
+        }
+      }}
+      className={className}
+      style={style}
+    />
+  );
+}
+
 function ShapeView({
   shape,
   selected,
   editing,
   editable,
   onStartEdit,
-  onCommitText,
+  onChangeText,
+  onCloseEdit,
 }: {
   shape: Shape;
   selected: boolean;
   editing: boolean;
   editable: boolean;
   onStartEdit: () => void;
-  onCommitText: (id: string, text: string) => void;
+  onChangeText: (id: string, text: string) => void;
+  onCloseEdit: (id: string) => void;
 }) {
   const b = shapeBounds(shape);
   return (
@@ -870,14 +940,10 @@ function ShapeView({
             width={Math.max(b.w + 80, 160)}
             height={Math.max(b.h + 16, shape.fontSize * 2)}
           >
-            <textarea
-              autoFocus
-              defaultValue={shape.text}
-              onPointerDown={(e) => e.stopPropagation()}
-              onBlur={(e) => onCommitText(shape.id, e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur();
-              }}
+            <InlineEditor
+              value={shape.text}
+              onChange={(t) => onChangeText(shape.id, t)}
+              onClose={() => onCloseEdit(shape.id)}
               className="size-full resize-none border-none bg-transparent p-0 outline-none"
               style={{
                 color: shape.color,
@@ -915,14 +981,10 @@ function ShapeView({
       {shape.type === 'note' && (
         <foreignObject x={shape.x} y={shape.y} width={shape.w} height={shape.h}>
           {editing ? (
-            <textarea
-              autoFocus
-              defaultValue={shape.text}
-              onPointerDown={(e) => e.stopPropagation()}
-              onBlur={(e) => onCommitText(shape.id, e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur();
-              }}
+            <InlineEditor
+              value={shape.text}
+              onChange={(t) => onChangeText(shape.id, t)}
+              onClose={() => onCloseEdit(shape.id)}
               className="size-full resize-none rounded-md border-none p-2 text-sm text-black shadow-md outline-none"
               style={{ backgroundColor: shape.color }}
             />
