@@ -39,6 +39,10 @@ import type { Peer } from '~/lib/use-presence';
 
 export type Tool = 'select' | 'rect' | 'ellipse' | 'note' | 'pen' | 'text' | 'comment';
 
+// Comments are hidden for now (the UX needs work). Flip to true to re-enable the
+// comment tool and the on-canvas threads — the implementation is kept intact.
+export const COMMENTS_ENABLED = false;
+
 /** Typography settings for the text tool and selected text shapes. */
 export interface TextStyle {
   fontSize: number;
@@ -132,7 +136,7 @@ export function Toolbar(props: ToolbarProps) {
       {editable && (
         <>
           <div className="flex items-center gap-1">
-            {TOOLS.map(({ tool, label, Icon }) => (
+            {TOOLS.filter((t) => COMMENTS_ENABLED || t.tool !== 'comment').map(({ tool, label, Icon }) => (
               <Tooltip key={tool}>
                 <TooltipTrigger asChild>
                   <IconButton

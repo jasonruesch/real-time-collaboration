@@ -25,7 +25,7 @@ import {
 } from 'react';
 import { CommentsLayer } from '~/components/comments-layer';
 import { CursorsLayer } from '~/components/cursors-layer';
-import { Toolbar, type TextStyle, type Tool } from '~/components/toolbar';
+import { COMMENTS_ENABLED, Toolbar, type TextStyle, type Tool } from '~/components/toolbar';
 import { roleFromToken, userSeed } from '~/lib/auth';
 import { downloadPng, downloadSvg } from '~/lib/export';
 import { boundsOf } from '~/lib/measure';
@@ -871,18 +871,20 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
           peers={peers.filter((p) => p.clientId !== selfId)}
           viewport={viewport}
         />
-        <CommentsLayer
-          comments={commentList}
-          viewport={viewport}
-          editable={editable}
-          selfId={selfId}
-          openId={openComment}
-          onOpen={handleOpenComment}
-          onSetText={commentSetText}
-          onReply={commentReply}
-          onResolve={commentResolve}
-          onDelete={commentDelete}
-        />
+        {COMMENTS_ENABLED && (
+          <CommentsLayer
+            comments={commentList}
+            viewport={viewport}
+            editable={editable}
+            selfId={selfId}
+            openId={openComment}
+            onOpen={handleOpenComment}
+            onSetText={commentSetText}
+            onReply={commentReply}
+            onResolve={commentResolve}
+            onDelete={commentDelete}
+          />
+        )}
         {followId != null && (
           <div className="pointer-events-auto absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-line bg-canvas px-3 py-1.5 text-sm shadow-lg">
             <span
