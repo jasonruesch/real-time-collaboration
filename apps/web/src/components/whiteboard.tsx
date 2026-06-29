@@ -1,5 +1,6 @@
 import {
   type Shape,
+  canEdit,
   moveShape,
   normalizeRect,
   pointsToPath,
@@ -15,6 +16,7 @@ import {
 } from 'react';
 import { CursorsLayer } from '~/components/cursors-layer';
 import { Toolbar, type Tool } from '~/components/toolbar';
+import { roleFromToken, userSeed } from '~/lib/auth';
 import { makeUser } from '~/lib/use-local-user';
 import { usePresence } from '~/lib/use-presence';
 import { useRoom } from '~/lib/use-room';
@@ -30,8 +32,10 @@ type Gesture =
   | { kind: 'pen'; id: string; points: number[] }
   | { kind: 'move'; id: string; startX: number; startY: number; orig: Shape };
 
-export function Whiteboard({ roomId }: { roomId: string }) {
-  const { room, status } = useRoom(roomId);
+export function Whiteboard({ roomId, token }: { roomId: string; token?: string | null }) {
+  const role = roleFromToken(token ?? null);
+  const editable = canEdit(role);
+  const { room, status } = useRoom(roomId, token);
   const shapeList = useShapes(room?.shapes);
   const peers = usePresence(room?.awareness);
 
@@ -64,11 +68,12 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     run?.();
   }, []);
 
-  // Announce identity to peers once connected.
+  // Announce identity to peers once connected. The display name/color come from
+  // a persisted per-browser seed so they stay stable across reloads.
   const selfId = room?.awareness.clientID ?? 0;
   useEffect(() => {
     if (!room) return;
-    room.awareness.setLocalStateField('user', makeUser(room.awareness.clientID));
+    room.awareness.setLocalStateField('user', makeUser(userSeed()));
   }, [room]);
 
   useEffect(() => () => {
@@ -81,11 +86,11 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   }, []);
 
   const deleteSelected = useCallback(() => {
-    if (room && selectedId) {
+    if (room && selectedId && editable) {
       room.shapes.delete(selectedId);
       setSelectedId(null);
     }
-  }, [room, selectedId]);
+  }, [room, selectedId, editable]);
 
   // Delete/Backspace removes the selection (unless typing in a field).
   useEffect(() => {
@@ -112,12 +117,18 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       });
       if (hit) {
         setSelectedId(hit.id);
-        gestureRef.current = { kind: 'move', id: hit.id, startX: x, startY: y, orig: hit };
+        // Viewers may select (to inspect) but not move.
+        if (editable) {
+          gestureRef.current = { kind: 'move', id: hit.id, startX: x, startY: y, orig: hit };
+        }
       } else {
         setSelectedId(null);
       }
       return;
     }
+
+    // Drawing tools require edit access.
+    if (!editable) return;
 
     const id = crypto.randomUUID();
     const base = { id, color, author: selfId, x, y };
@@ -183,7 +194,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   }
 
   function editNote(shape: Shape) {
-    if (shape.type !== 'note' || !room) return;
+    if (shape.type !== 'note' || !room || !editable) return;
     const text = window.prompt('Note text', shape.text);
     if (text != null) room.shapes.set(shape.id, { ...shape, text });
   }
@@ -205,10 +216,12 @@ export function Whiteboard({ roomId }: { roomId: string }) {
         onColorChange={setColor}
         hasSelection={selectedId != null}
         onDeleteSelected={deleteSelected}
-        onClear={() => room.shapes.clear()}
+        onClear={() => editable && room.shapes.clear()}
         status={status}
         peers={peers}
         selfId={selfId}
+        role={role}
+        roomId={roomId}
       />
       <div
         ref={surfaceRef}

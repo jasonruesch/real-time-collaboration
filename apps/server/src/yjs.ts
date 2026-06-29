@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http';
-import type { Shape } from '@coalesce/board';
+import type { Role, Shape } from '@coalesce/board';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as map from 'lib0/map';
@@ -119,21 +119,42 @@ function closeConn(doc: SharedDoc, conn: WebSocket): void {
   conn.close();
 }
 
-function onMessage(conn: WebSocket, doc: SharedDoc, message: Uint8Array): void {
+function onMessage(
+  conn: WebSocket,
+  doc: SharedDoc,
+  message: Uint8Array,
+  role: Role,
+): void {
   try {
     const encoder = encoding.createEncoder();
     const decoder = decoding.createDecoder(message);
     const messageType = decoding.readVarUint(decoder);
     switch (messageType) {
-      case MESSAGE_SYNC:
+      case MESSAGE_SYNC: {
+        // Mirror syncProtocol.readSyncMessage, but for viewers answer the initial
+        // state request (step 1) while silently dropping any document writes
+        // (step 2 / update) — read-only access enforced server-side.
         encoding.writeVarUint(encoder, MESSAGE_SYNC);
-        syncProtocol.readSyncMessage(decoder, encoder, doc, conn);
+        const syncType = decoding.readVarUint(decoder);
+        switch (syncType) {
+          case syncProtocol.messageYjsSyncStep1:
+            syncProtocol.readSyncStep1(decoder, encoder, doc);
+            break;
+          case syncProtocol.messageYjsSyncStep2:
+            if (role !== 'viewer') syncProtocol.readSyncStep2(decoder, doc, conn);
+            break;
+          case syncProtocol.messageYjsUpdate:
+            if (role !== 'viewer') syncProtocol.readUpdate(decoder, doc, conn);
+            break;
+        }
         // An empty body (length 1 = just the type) means nothing to reply with.
         if (encoding.length(encoder) > 1) {
           send(doc, conn, encoding.toUint8Array(encoder));
         }
         break;
+      }
       case MESSAGE_AWARENESS:
+        // Awareness (cursors/presence) is always allowed, even for viewers.
         awarenessProtocol.applyAwarenessUpdate(
           doc.awareness,
           decoding.readVarUint8Array(decoder),
@@ -151,6 +172,7 @@ export async function setupWSConnection(
   conn: WebSocket,
   _req: IncomingMessage,
   roomName: string,
+  role: Role = 'editor',
 ): Promise<void> {
   conn.binaryType = 'arraybuffer';
   const doc = getYDoc(roomName);
@@ -159,7 +181,7 @@ export async function setupWSConnection(
   doc.conns.set(conn, new Set());
 
   conn.on('message', (message: ArrayBuffer) =>
-    onMessage(conn, doc, new Uint8Array(message)),
+    onMessage(conn, doc, new Uint8Array(message), role),
   );
 
   // Keepalive: drop a connection that misses a ping/pong cycle.

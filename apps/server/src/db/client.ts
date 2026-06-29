@@ -12,7 +12,7 @@ import * as schema from '~/db/schema.ts';
 export const sql = env.DATABASE_URL ? postgres(env.DATABASE_URL) : null;
 export const db = sql ? drizzle(sql, { schema }) : null;
 
-export { boards } from '~/db/schema.ts';
+export { boards, rooms } from '~/db/schema.ts';
 
 /**
  * Create tables if they don't exist. Idempotent and safe to run on every boot,
@@ -25,6 +25,12 @@ export async function ensureSchema(): Promise<void> {
       id text PRIMARY KEY,
       state bytea,
       updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS rooms (
+      id text PRIMARY KEY,
+      created_at timestamptz NOT NULL DEFAULT now()
     )
   `;
 }

@@ -24,6 +24,9 @@ const envSchema = z.object({
   // server keeps rooms in memory only (zero-config local dev); set it to make
   // boards survive restarts and empty rooms.
   DATABASE_URL: z.string().optional(),
+  // HMAC secret for signing room share-link tokens. Required in production; in
+  // dev an insecure fallback is used so the feature works without setup.
+  AUTH_SECRET: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

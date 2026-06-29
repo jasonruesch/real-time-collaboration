@@ -54,6 +54,14 @@ export interface Presence {
   cursor: { x: number; y: number } | null;
 }
 
+/** Access level a room token grants. Owners can mint links; viewers are read-only. */
+export type Role = 'owner' | 'editor' | 'viewer';
+
+/** Whether a role may modify the board. */
+export function canEdit(role: Role): boolean {
+  return role !== 'viewer';
+}
+
 /** Fixed palette assigned to participants and used for new shapes. */
 export const PALETTE = [
   '#6366f1', // indigo

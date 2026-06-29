@@ -20,3 +20,13 @@ export const boards = pgTable('boards', {
   state: bytea('state'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+/**
+ * Room metadata, created when a board is first opened via the API. Ownership is
+ * proven by the owner token (see auth.ts), so this is mostly for record-keeping
+ * and future per-user grants rather than authorization.
+ */
+export const rooms = pgTable('rooms', {
+  id: text('id').primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
