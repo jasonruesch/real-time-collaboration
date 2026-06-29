@@ -1,7 +1,13 @@
 import type { Peer } from '~/lib/use-presence';
 
+interface Viewport {
+  x: number;
+  y: number;
+  scale: number;
+}
+
 /** Renders remote peers' live cursors over the board surface. */
-export function CursorsLayer({ peers }: { peers: Peer[] }) {
+export function CursorsLayer({ peers, viewport }: { peers: Peer[]; viewport: Viewport }) {
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
       {peers.map((peer) =>
@@ -9,7 +15,11 @@ export function CursorsLayer({ peers }: { peers: Peer[] }) {
           <div
             key={peer.clientId}
             className="absolute -translate-y-1 will-change-transform"
-            style={{ left: peer.cursor.x, top: peer.cursor.y }}
+            style={{
+              // Cursors are shared in board space; project through our viewport.
+              left: peer.cursor.x * viewport.scale + viewport.x,
+              top: peer.cursor.y * viewport.scale + viewport.y,
+            }}
           >
             <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
               <path

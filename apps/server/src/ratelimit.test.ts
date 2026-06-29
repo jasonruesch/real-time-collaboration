@@ -3,8 +3,7 @@ import { createBucket } from '~/ratelimit.ts';
 
 describe('token bucket', () => {
   it('allows a burst up to capacity then blocks', () => {
-    let now = 0;
-    const bucket = createBucket(() => now);
+    const bucket = createBucket(() => 0);
     let allowed = 0;
     for (let i = 0; i < 400; i++) if (bucket.take()) allowed++;
     // Capacity is 300; the rest are dropped while time stands still.

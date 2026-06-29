@@ -17,6 +17,8 @@ export interface BaseShape {
   color: string;
   /** Awareness client id of the author, for attribution. */
   author: number;
+  /** Stacking order; higher draws on top. Optional for back-compat (treated as 0). */
+  z?: number;
 }
 
 export interface RectShape extends BaseShape {
