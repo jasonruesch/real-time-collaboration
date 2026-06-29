@@ -1,0 +1,12 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+allowBuilds:
+  esbuild: true
+  '@tailwindcss/oxide': true
+  # leveldown ships with y-websocket's optional leveldb persistence, which we
+  # don't use (rooms live in memory) — no need to build its native addon.
+  leveldown: false
+minimumReleaseAgeExclude:
+  - '@jasonruesch/*'
+  - '@evolonix/*'

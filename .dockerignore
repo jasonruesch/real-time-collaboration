@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.turbo
+**/.vite
+**/coverage
+**/.env
+**/.env.*
+.git
+.github
+*.md
+apps/web/node_modules/.react-router-next

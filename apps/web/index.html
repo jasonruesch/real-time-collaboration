@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-brand="default">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Coalesce</title>
+    <meta
+      name="description"
+      content="Coalesce — a real-time collaborative whiteboard where edits never collide."
+    />
+    <script>
+      // Apply persisted theme/brand before first paint to avoid a flash.
+      try {
+        const raw = localStorage.getItem('coalesce-theme');
+        const el = document.documentElement;
+        if (raw) {
+          const { state } = JSON.parse(raw);
+          const theme =
+            state?.theme === 'system' || !state?.theme
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : state.theme;
+          el.setAttribute('data-theme', theme);
+          if (state?.brand) el.setAttribute('data-brand', state.brand);
+        }
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

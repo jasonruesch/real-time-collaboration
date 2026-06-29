@@ -1,0 +1,13 @@
+node_modules
+dist
+.turbo
+.vite
+coverage
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+playwright-report
+test-results
+.claude/settings.local.json

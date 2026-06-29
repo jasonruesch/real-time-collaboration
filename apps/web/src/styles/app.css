@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+
+/* Design-system token + theme layer (provides --ds-* vars, the `dark` variant,
+ * data-theme / data-brand switching, and semantic utilities like bg-canvas,
+ * text-fg, bg-accent, border-line, …). We compile the DS through our own
+ * Tailwind build instead of importing the prebuilt styles.css. */
+@import '@jasonruesch/react/preset.css';
+
+/* Emit the utility classes the design-system components rely on. */
+@source '../../node_modules/@jasonruesch/react/dist';
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+}
+
+/* The board surface should own touch gestures (no scroll/zoom hijack). */
+.board-surface {
+  touch-action: none;
+  user-select: none;
+}
