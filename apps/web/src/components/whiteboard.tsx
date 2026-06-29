@@ -15,12 +15,15 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
+import { CommentsLayer } from '~/components/comments-layer';
 import { CursorsLayer } from '~/components/cursors-layer';
 import { Toolbar, type Tool } from '~/components/toolbar';
 import { roleFromToken, userSeed } from '~/lib/auth';
+import { useComments } from '~/lib/use-comments';
 import { makeUser } from '~/lib/use-local-user';
 import { usePresence } from '~/lib/use-presence';
 import { useRoom } from '~/lib/use-room';
@@ -60,15 +63,19 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   const editable = canEdit(role);
   const { room, status } = useRoom(roomId, token);
   const shapeList = useShapes(room?.shapes);
+  const commentList = useComments(room?.comments);
   const peers = usePresence(room?.awareness);
+  const me = useMemo(() => makeUser(userSeed()), []);
 
   const [tool, setTool] = useState<Tool>('select');
   const [color, setColor] = useState<string>('#6366f1');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [openComment, setOpenComment] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<Bounds | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
   const [spaceHeld, setSpaceHeld] = useState(false);
+  const [followId, setFollowId] = useState<number | null>(null);
   const [undoState, setUndoState] = useState({ canUndo: false, canRedo: false });
 
   // Shapes painted bottom-to-top by stacking order.
@@ -111,8 +118,37 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   const selfId = room?.awareness.clientID ?? 0;
   useEffect(() => {
     if (!room) return;
-    room.awareness.setLocalStateField('user', makeUser(userSeed()));
-  }, [room]);
+    room.awareness.setLocalStateField('user', me);
+  }, [room, me]);
+
+  // Broadcast selection so peers can see what each other has selected.
+  useEffect(() => {
+    room?.awareness.setLocalStateField('selection', [...selectedIds]);
+  }, [room, selectedIds]);
+
+  // Broadcast viewport so peers can follow this user's view.
+  useEffect(() => {
+    room?.awareness.setLocalStateField('viewport', viewport);
+  }, [room, viewport]);
+
+  // Follow-mode: mirror a peer's viewport as it moves (sync external → React).
+  const followView = followId != null
+    ? peers.find((p) => p.clientId === followId)?.viewport
+    : undefined;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (followView) setViewport(followView);
+    // Depend on the primitive fields, not the followView object — it's a fresh
+    // reference each render and would otherwise loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followView?.x, followView?.y, followView?.scale]);
+  // Stop following if that peer leaves.
+  useEffect(() => {
+    if (followId != null && !peers.some((p) => p.clientId === followId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFollowId(null);
+    }
+  }, [peers, followId]);
 
   useEffect(() => () => {
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -152,6 +188,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      setFollowId(null); // taking manual control exits follow-mode
       const rect = el.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -258,6 +295,74 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     });
   }, [room, editable, shapeList, selectedShapes]);
 
+  // ---- Comments --------------------------------------------------------------
+
+  const commentSetText = useCallback(
+    (id: string, text: string) => {
+      const c = room?.comments.get(id);
+      if (c) room!.comments.set(id, { ...c, text });
+    },
+    [room],
+  );
+
+  const commentReply = useCallback(
+    (parentId: string, text: string) => {
+      if (!room) return;
+      const parent = room.comments.get(parentId);
+      if (!parent) return;
+      const id = crypto.randomUUID();
+      room.comments.set(id, {
+        id,
+        x: parent.x,
+        y: parent.y,
+        author: selfId,
+        authorName: me.name,
+        text,
+        createdAt: Date.now(),
+        resolved: false,
+        parentId,
+      });
+    },
+    [room, selfId, me.name],
+  );
+
+  const commentResolve = useCallback(
+    (id: string, resolved: boolean) => {
+      const c = room?.comments.get(id);
+      if (c) room!.comments.set(id, { ...c, resolved });
+    },
+    [room],
+  );
+
+  const commentDelete = useCallback(
+    (id: string) => {
+      if (!room) return;
+      // Deleting a root removes its whole thread.
+      const replies = commentList.filter((c) => c.parentId === id).map((c) => c.id);
+      room.doc.transact(() => {
+        room.comments.delete(id);
+        replies.forEach((rid) => room.comments.delete(rid));
+      });
+    },
+    [room, commentList],
+  );
+
+  // Opening another thread (or closing) discards a pin that was placed but left
+  // empty, so an accidental click doesn't litter the board.
+  const handleOpenComment = useCallback(
+    (id: string | null) => {
+      setOpenComment((prev) => {
+        if (prev && prev !== id) {
+          const root = room?.comments.get(prev);
+          const hasReplies = commentList.some((c) => c.parentId === prev);
+          if (root && !root.text && !hasReplies) room?.comments.delete(prev);
+        }
+        return id;
+      });
+    },
+    [room, commentList],
+  );
+
   // Keyboard shortcuts: delete, undo/redo, copy/paste/duplicate.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -297,6 +402,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
 
     // Pan: middle button, or left button while space is held.
     if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+      setFollowId(null); // taking manual control exits follow-mode
       const v = viewportRef.current;
       gestureRef.current = {
         kind: 'pan',
@@ -352,6 +458,23 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
 
     // Drawing tools require edit access.
     if (!editable) return;
+
+    if (tool === 'comment') {
+      const id = crypto.randomUUID();
+      room.comments.set(id, {
+        id,
+        x,
+        y,
+        author: selfId,
+        authorName: me.name,
+        text: '',
+        createdAt: Date.now(),
+        resolved: false,
+      });
+      setOpenComment(id);
+      setTool('select');
+      return;
+    }
 
     const id = crypto.randomUUID();
     const base = { id, color, author: selfId, x, y, z: nextZ(shapeList) };
@@ -481,6 +604,8 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
         status={status}
         peers={peers}
         selfId={selfId}
+        followId={followId}
+        onFollow={(id) => setFollowId((prev) => (prev === id ? null : id))}
         role={role}
         roomId={roomId}
       />
@@ -526,12 +651,68 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
                 pointerEvents="none"
               />
             )}
+            {/* Remote peers' selections, outlined in each peer's color. */}
+            {peers
+              .filter((p) => p.clientId !== selfId && p.selection?.length)
+              .flatMap((p) =>
+                p.selection!.map((id) => {
+                  const s = shapeList.find((sh) => sh.id === id);
+                  if (!s) return null;
+                  const bb = shapeBounds(s);
+                  return (
+                    <rect
+                      key={`${p.clientId}-${id}`}
+                      x={bb.x - 3}
+                      y={bb.y - 3}
+                      width={bb.w + 6}
+                      height={bb.h + 6}
+                      fill="none"
+                      stroke={p.user?.color ?? '#888'}
+                      strokeWidth={1.5}
+                      opacity={0.8}
+                      vectorEffect="non-scaling-stroke"
+                      pointerEvents="none"
+                    />
+                  );
+                }),
+              )}
           </g>
         </svg>
         <CursorsLayer
           peers={peers.filter((p) => p.clientId !== selfId)}
           viewport={viewport}
         />
+        <CommentsLayer
+          comments={commentList}
+          viewport={viewport}
+          editable={editable}
+          selfId={selfId}
+          openId={openComment}
+          onOpen={handleOpenComment}
+          onSetText={commentSetText}
+          onReply={commentReply}
+          onResolve={commentResolve}
+          onDelete={commentDelete}
+        />
+        {followId != null && (
+          <div className="pointer-events-auto absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-line bg-canvas px-3 py-1.5 text-sm shadow-lg">
+            <span
+              className="size-2 rounded-full"
+              style={{
+                backgroundColor:
+                  peers.find((p) => p.clientId === followId)?.user?.color ?? '#888',
+              }}
+            />
+            Following {peers.find((p) => p.clientId === followId)?.user?.name ?? 'peer'}
+            <button
+              type="button"
+              onClick={() => setFollowId(null)}
+              className="ml-1 font-medium text-accent hover:underline"
+            >
+              Stop
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

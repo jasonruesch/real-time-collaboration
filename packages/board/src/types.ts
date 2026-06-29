@@ -54,6 +54,27 @@ export type Bounds = { x: number; y: number; w: number; h: number };
 export interface Presence {
   user: { name: string; color: string };
   cursor: { x: number; y: number } | null;
+  /** Ids of shapes this peer currently has selected. */
+  selection?: string[];
+  /** This peer's pan/zoom, used for follow-mode. */
+  viewport?: { x: number; y: number; scale: number };
+}
+
+/**
+ * A comment pinned to the board. Root comments (no parentId) place a pin at
+ * (x, y); replies reference their root via parentId and form a thread.
+ */
+export interface Comment {
+  id: string;
+  x: number;
+  y: number;
+  author: number;
+  authorName: string;
+  text: string;
+  createdAt: number;
+  resolved: boolean;
+  /** Root comment id when this is a reply; absent for a thread root. */
+  parentId?: string;
 }
 
 /** Access level a room token grants. Owners can mint links; viewers are read-only. */
