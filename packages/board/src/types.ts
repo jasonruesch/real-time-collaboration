@@ -5,7 +5,10 @@
  * wins per shape id, which is all a whiteboard needs for conflict-free merge.
  */
 
-export type ShapeType = 'rect' | 'ellipse' | 'note' | 'path';
+export type ShapeType = 'rect' | 'ellipse' | 'note' | 'path' | 'text';
+
+/** Font families offered by the text tool. */
+export type FontFamily = 'sans' | 'serif' | 'mono';
 
 export interface BaseShape {
   id: string;
@@ -46,7 +49,17 @@ export interface PathShape extends BaseShape {
   points: number[];
 }
 
-export type Shape = RectShape | EllipseShape | NoteShape | PathShape;
+/** Free typography placed directly on the canvas (no box, transparent). */
+export interface TextShape extends BaseShape {
+  type: 'text';
+  text: string;
+  fontSize: number;
+  fontFamily: FontFamily;
+  bold: boolean;
+  italic: boolean;
+}
+
+export type Shape = RectShape | EllipseShape | NoteShape | PathShape | TextShape;
 
 export type Bounds = { x: number; y: number; w: number; h: number };
 

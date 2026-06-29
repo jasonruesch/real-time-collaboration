@@ -1,5 +1,33 @@
 import { PALETTE } from './types.ts';
-import type { Bounds, Shape } from './types.ts';
+import type { Bounds, FontFamily, Shape, TextShape } from './types.ts';
+
+/** CSS font-family stacks for each text font option. */
+export const FONT_STACKS: Record<FontFamily, string> = {
+  sans: 'ui-sans-serif, system-ui, sans-serif',
+  serif: 'ui-serif, Georgia, "Times New Roman", serif',
+  mono: 'ui-monospace, "SF Mono", Menlo, monospace',
+};
+
+/** Line height multiple shared by rendering, editing, and metrics. */
+export const TEXT_LINE_HEIGHT = 1.3;
+
+// Rough average glyph-width / font-size ratio per family, for layout estimates.
+const CHAR_WIDTH: Record<FontFamily, number> = { sans: 0.56, serif: 0.5, mono: 0.6 };
+
+/**
+ * Estimated bounding box of a text shape. SVG <text> has no cheap intrinsic
+ * size, so we approximate from line count and an average glyph width — close
+ * enough for selection, hit-testing, and export framing.
+ */
+export function textMetrics(shape: TextShape): Bounds {
+  const lines = (shape.text || ' ').split('\n');
+  const charW = (CHAR_WIDTH[shape.fontFamily] ?? 0.56) * shape.fontSize * (shape.bold ? 1.04 : 1);
+  const longest = lines.reduce((m, l) => Math.max(m, l.length), 0);
+  const w = Math.max(20, longest * charW);
+  const lineHeight = shape.fontSize * TEXT_LINE_HEIGHT;
+  const h = Math.max(lineHeight, lines.length * lineHeight);
+  return { x: shape.x, y: shape.y, w, h };
+}
 
 /**
  * Normalize a drag (start → current) into a positive-size rectangle, so dragging
@@ -22,6 +50,7 @@ export function normalizeRect(
 /** Axis-aligned bounding box of any shape. */
 export function shapeBounds(shape: Shape): Bounds {
   if (shape.type === 'path') return boundsOfPoints(shape.points);
+  if (shape.type === 'text') return textMetrics(shape);
   return { x: shape.x, y: shape.y, w: shape.w, h: shape.h };
 }
 
