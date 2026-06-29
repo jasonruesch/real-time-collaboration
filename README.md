@@ -31,6 +31,24 @@ A pnpm + Turborepo monorepo with a single-origin deployment:
   (ephemeral state, not persisted into the document).
 - **Offline:** Yjs buffers local edits and the provider auto-reconnects; on
   reconnect the divergent states coalesce — hence the name.
+- **Persistence:** with `DATABASE_URL` set, each room's CRDT snapshot is loaded
+  from Postgres on open and written back (debounced) on edits, so boards survive
+  restarts. Unset → in-memory only (zero-config dev).
+- **Access:** boards have an owner; the owner mints `editor`/`viewer` share
+  links (signed tokens). Viewers are read-only, enforced at the WebSocket layer.
+- **Scale:** with `REDIS_URL` set, instances fan room updates out to each other
+  over Redis pub/sub, so the app runs behind a load balancer across many
+  machines. A per-connection token bucket rate-limits abusive sockets.
+
+### Configuration
+
+All optional — unset values degrade gracefully to single-instance, in-memory, open-access dev:
+
+| Env var | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Postgres for durable boards + room metadata |
+| `AUTH_SECRET` | HMAC secret for room share-link tokens (required in prod) |
+| `REDIS_URL` | Redis for cross-instance fan-out (required when scaling > 1) |
 
 ## Develop
 

@@ -7,6 +7,7 @@ import { WebSocketServer } from 'ws';
 import { signRoomToken, verifyRoomToken } from '~/auth.ts';
 import { db, ensureSchema, rooms } from '~/db/client.ts';
 import { env } from '~/env.ts';
+import { closePubsub } from '~/pubsub.ts';
 import { getRoomSnapshot, getStats, setupWSConnection } from '~/yjs.ts';
 
 const WS_PREFIX = '/yjs/';
@@ -100,6 +101,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.addHook('onClose', async () => {
     await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await closePubsub();
   });
 
   // In production the server also serves the built SPA from a single origin.
