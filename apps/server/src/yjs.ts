@@ -13,6 +13,14 @@ import {
   loadDoc,
   scheduleSave,
 } from '~/persistence.ts';
+import {
+  REMOTE_ORIGIN,
+  publishAwareness,
+  publishUpdate,
+  subscribeRoom,
+  unsubscribeRoom,
+} from '~/pubsub.ts';
+import { MAX_MESSAGE_BYTES, createBucket } from '~/ratelimit.ts';
 
 /**
  * In-memory Yjs sync server. This is a TypeScript port of the canonical
@@ -46,24 +54,29 @@ class SharedDoc extends Y.Doc {
       'update',
       (
         { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
-        conn: WebSocket | null,
+        conn: WebSocket | string | null,
       ) => {
         const changed = added.concat(updated, removed);
-        if (conn !== null) {
+        // Only real socket origins map to a controlled-id set; the REMOTE_ORIGIN
+        // string (relayed from another instance) and null are ignored here.
+        if (conn !== null && typeof conn !== 'string') {
           const controlled = this.conns.get(conn);
           if (controlled !== undefined) {
             added.forEach((id) => controlled.add(id));
             removed.forEach((id) => controlled.delete(id));
           }
         }
+        const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(
+          this.awareness,
+          changed,
+        );
         const encoder = encoding.createEncoder();
         encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
-        encoding.writeVarUint8Array(
-          encoder,
-          awarenessProtocol.encodeAwarenessUpdate(this.awareness, changed),
-        );
+        encoding.writeVarUint8Array(encoder, awarenessUpdate);
         const buf = encoding.toUint8Array(encoder);
         this.conns.forEach((_, c) => send(this, c, buf));
+        // Fan out to other instances, unless this change came from one.
+        if (conn !== REMOTE_ORIGIN) publishAwareness(this.name, awarenessUpdate);
       },
     );
 
@@ -74,8 +87,14 @@ class SharedDoc extends Y.Doc {
       syncProtocol.writeUpdate(encoder, update);
       const buf = encoding.toUint8Array(encoder);
       shared.conns.forEach((_, c) => send(shared, c, buf));
-      // Persist real edits, but not the snapshot we just loaded from storage.
-      if (origin !== PERSISTENCE_ORIGIN) scheduleSave(shared.name, shared);
+      // A "local" edit is one from a connected client on this instance — not the
+      // snapshot we loaded, nor an update relayed from another instance. Only
+      // such edits get persisted (one writer) and fanned out over Redis.
+      const local = origin !== PERSISTENCE_ORIGIN && origin !== REMOTE_ORIGIN;
+      if (local) {
+        scheduleSave(shared.name, shared);
+        publishUpdate(shared.name, update);
+      }
     });
   }
 }
@@ -87,6 +106,15 @@ function getYDoc(docName: string): SharedDoc {
     const doc = new SharedDoc(docName);
     // Kick off the load now; setupWSConnection awaits this before handshaking.
     doc.whenLoaded = loadDoc(docName, doc);
+    // Apply edits relayed from other instances to our local copy. The REMOTE
+    // origin keeps these from being re-published or re-persisted.
+    subscribeRoom(docName, (msg) => {
+      if (msg.kind === 'update') {
+        Y.applyUpdate(doc, msg.data, REMOTE_ORIGIN);
+      } else {
+        awarenessProtocol.applyAwarenessUpdate(doc.awareness, msg.data, REMOTE_ORIGIN);
+      }
+    });
     return doc;
   });
 }
@@ -112,6 +140,7 @@ function closeConn(doc: SharedDoc, conn: WebSocket): void {
     // (flushSave encodes synchronously, so destroying right after is safe).
     if (doc.conns.size === 0) {
       void flushSave(doc.name, doc);
+      unsubscribeRoom(doc.name);
       doc.destroy();
       docs.delete(doc.name);
     }
@@ -180,9 +209,13 @@ export async function setupWSConnection(
   await doc.whenLoaded;
   doc.conns.set(conn, new Set());
 
-  conn.on('message', (message: ArrayBuffer) =>
-    onMessage(conn, doc, new Uint8Array(message), role),
-  );
+  // Per-connection rate limit + payload cap: drop oversized or flooding traffic.
+  const bucket = createBucket();
+  conn.on('message', (message: ArrayBuffer) => {
+    const bytes = new Uint8Array(message);
+    if (bytes.byteLength > MAX_MESSAGE_BYTES || !bucket.take()) return;
+    onMessage(conn, doc, bytes, role);
+  });
 
   // Keepalive: drop a connection that misses a ping/pong cycle.
   let pongReceived = true;

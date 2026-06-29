@@ -27,6 +27,9 @@ const envSchema = z.object({
   // HMAC secret for signing room share-link tokens. Required in production; in
   // dev an insecure fallback is used so the feature works without setup.
   AUTH_SECRET: z.string().optional(),
+  // Redis connection string for cross-instance room fan-out. When unset the
+  // server runs single-instance (in-process broadcast only).
+  REDIS_URL: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

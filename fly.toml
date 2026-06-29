@@ -8,6 +8,11 @@ primary_region = 'iad'
 
 [build]
 
+# Secrets (set with `fly secrets set`, not here):
+#   DATABASE_URL  Postgres — durable boards + room metadata (e.g. Fly Postgres)
+#   AUTH_SECRET   HMAC secret for room share-link tokens
+#   REDIS_URL     Redis — cross-instance room fan-out (required when scaling > 1)
+# To scale horizontally: `fly scale count N` (and raise min_machines_running).
 [env]
   HOST = '0.0.0.0'
   PORT = '3000'
