@@ -2,6 +2,7 @@ import { Button, Heading, Input, Text } from '@jasonruesch/react';
 import { ArrowRight, Plus } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router';
+import { storeToken } from '~/lib/auth';
 
 /** Generate a short, URL-friendly room id. */
 function newRoomId(): string {
@@ -12,6 +13,24 @@ function newRoomId(): string {
 export default function IndexPage() {
   const navigate = useNavigate();
   const [joinId, setJoinId] = useState('');
+  const [creating, setCreating] = useState(false);
+
+  // Create a board server-side to receive an owner token (lets the creator mint
+  // share links). Falls back to a client-generated open room if the API is down.
+  async function create() {
+    setCreating(true);
+    try {
+      const res = await fetch('/api/rooms', { method: 'POST' });
+      if (!res.ok) throw new Error('create failed');
+      const { roomId, token } = (await res.json()) as { roomId: string; token: string };
+      storeToken(roomId, token);
+      navigate(`/board/${roomId}`);
+    } catch {
+      navigate(`/board/${newRoomId()}`);
+    } finally {
+      setCreating(false);
+    }
+  }
 
   function join(event: FormEvent) {
     event.preventDefault();
@@ -31,7 +50,7 @@ export default function IndexPage() {
       </div>
 
       <div className="space-y-4">
-        <Button onClick={() => navigate(`/board/${newRoomId()}`)}>
+        <Button onClick={() => void create()} disabled={creating}>
           <Plus size={18} aria-hidden />
           Create a new board
         </Button>

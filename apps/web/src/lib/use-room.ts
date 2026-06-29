@@ -25,13 +25,20 @@ function wsBase(): string {
  * local edits while offline and auto-reconnects; on reconnect the divergent
  * states merge automatically. Tears everything down on room change/unmount.
  */
-export function useRoom(roomId: string): { room: Room | null; status: ConnectionStatus } {
+export function useRoom(
+  roomId: string,
+  token?: string | null,
+): { room: Room | null; status: ConnectionStatus } {
   const [room, setRoom] = useState<Room | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
 
   useEffect(() => {
     const doc = new Y.Doc();
-    const provider = new WebsocketProvider(wsBase(), roomId, doc);
+    // The token (when present) rides along as `?t=` so the server can grant the
+    // matching role; an absent/invalid token falls back to open editor access.
+    const provider = new WebsocketProvider(wsBase(), roomId, doc, {
+      params: token ? { t: token } : {},
+    });
     const shapes = doc.getMap<Shape>('shapes');
     // Instantiating a per-room external resource (Y.Doc + provider) in an effect
     // and exposing it via state is the StrictMode-safe pattern — the effect's
@@ -51,7 +58,7 @@ export function useRoom(roomId: string): { room: Room | null; status: Connection
       setRoom(null);
       setStatus('connecting');
     };
-  }, [roomId]);
+  }, [roomId, token]);
 
   return { room, status };
 }

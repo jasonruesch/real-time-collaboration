@@ -17,3 +17,47 @@ describe('http surface', () => {
     expect(res.json()).toEqual({ exists: false, clients: 0, shapes: [] });
   });
 });
+
+describe('room access', () => {
+  it('creates a room with an owner token', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/rooms' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { roomId: string; token: string };
+    expect(body.roomId).toBeTruthy();
+    expect(body.token).toBeTruthy();
+  });
+
+  it('refuses to mint a link without an owner token', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/rooms/any/links',
+      payload: { role: 'viewer' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('mints a viewer link for the room owner', async () => {
+    const created = await app.inject({ method: 'POST', url: '/api/rooms' });
+    const { roomId, token } = created.json() as { roomId: string; token: string };
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/rooms/${roomId}/links`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { role: 'viewer' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ role: 'viewer' });
+  });
+
+  it('rejects an owner token issued for a different room', async () => {
+    const created = await app.inject({ method: 'POST', url: '/api/rooms' });
+    const { token } = created.json() as { roomId: string; token: string };
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/rooms/some-other-room/links',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { role: 'editor' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});

@@ -1,12 +1,20 @@
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import type { Role } from '@coalesce/board';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { WebSocketServer } from 'ws';
-import { ensureSchema } from '~/db/client.ts';
+import { signRoomToken, verifyRoomToken } from '~/auth.ts';
+import { db, ensureSchema, rooms } from '~/db/client.ts';
 import { env } from '~/env.ts';
 import { getRoomSnapshot, getStats, setupWSConnection } from '~/yjs.ts';
 
 const WS_PREFIX = '/yjs/';
+
+/** Generate a short, URL-friendly room id. */
+function newRoomId(): string {
+  return randomUUID().split('-')[0];
+}
 
 /**
  * Build the fully-wired server. Exported (rather than started) so tests can
@@ -32,13 +40,49 @@ export async function buildApp(): Promise<FastifyInstance> {
     async (request) => getRoomSnapshot(request.params.roomId),
   );
 
+  // Create a board: record it (when a DB is configured) and mint an owner token
+  // that lets the creator generate share links.
+  app.post('/api/rooms', async () => {
+    const roomId = newRoomId();
+    if (db) await db.insert(rooms).values({ id: roomId }).onConflictDoNothing();
+    const token = await signRoomToken(roomId, 'owner');
+    return { roomId, token };
+  });
+
+  // Mint an editor/viewer share link, gated by a valid owner token for the room.
+  app.post<{ Params: { roomId: string }; Body: { role?: Role } }>(
+    '/api/rooms/:roomId/links',
+    async (request, reply) => {
+      const header = request.headers.authorization;
+      const bearer = header?.startsWith('Bearer ') ? header.slice(7) : null;
+      const claims = bearer ? await verifyRoomToken(bearer) : null;
+      if (!claims || claims.role !== 'owner' || claims.room !== request.params.roomId) {
+        return reply.code(403).send({ message: 'Owner token required' });
+      }
+      const role: Role = request.body?.role === 'viewer' ? 'viewer' : 'editor';
+      const token = await signRoomToken(request.params.roomId, role);
+      return { token, role };
+    },
+  );
+
   // The Yjs WebSocket sync backend. `noServer` mode lets us route only the
   // `/yjs/<room>` upgrades here and leave the rest to Fastify.
   const wss = new WebSocketServer({ noServer: true });
   wss.on('connection', (socket, request) => {
-    const path = (request.url ?? '').split('?')[0];
-    const room = decodeURIComponent(path.slice(WS_PREFIX.length)) || 'default';
-    setupWSConnection(socket, request, room).catch((err) => {
+    const url = new URL(request.url ?? '', 'http://localhost');
+    const room = decodeURIComponent(url.pathname.slice(WS_PREFIX.length)) || 'default';
+    const handle = async () => {
+      // Default to editor (open/legacy access); a valid token for *this* room
+      // sets the granted role. A foreign/invalid token never elevates access.
+      let role: Role = 'editor';
+      const token = url.searchParams.get('t');
+      if (token) {
+        const claims = await verifyRoomToken(token);
+        if (claims && claims.room === room) role = claims.role;
+      }
+      await setupWSConnection(socket, request, room, role);
+    };
+    handle().catch((err) => {
       app.log.error(err, 'failed to set up ws connection');
       socket.close();
     });
