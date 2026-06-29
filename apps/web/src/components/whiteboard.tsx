@@ -1,6 +1,9 @@
 import {
   type Bounds,
+  FONT_STACKS,
+  TEXT_LINE_HEIGHT,
   type Shape,
+  type TextShape,
   backZ,
   canEdit,
   moveShape,
@@ -21,7 +24,7 @@ import {
 } from 'react';
 import { CommentsLayer } from '~/components/comments-layer';
 import { CursorsLayer } from '~/components/cursors-layer';
-import { Toolbar, type Tool } from '~/components/toolbar';
+import { Toolbar, type TextStyle, type Tool } from '~/components/toolbar';
 import { roleFromToken, userSeed } from '~/lib/auth';
 import { downloadPng, downloadSvg } from '~/lib/export';
 import { useComments } from '~/lib/use-comments';
@@ -70,6 +73,12 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
 
   const [tool, setTool] = useState<Tool>('select');
   const [color, setColor] = useState<string>('#6366f1');
+  const [textStyle, setTextStyle] = useState<TextStyle>({
+    fontSize: 24,
+    fontFamily: 'sans',
+    bold: false,
+    italic: false,
+  });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [openComment, setOpenComment] = useState<string | null>(null);
@@ -126,6 +135,29 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   useEffect(() => {
     room?.awareness.setLocalStateField('selection', [...selectedIds]);
   }, [room, selectedIds]);
+
+  // Reflect a selected text shape's typography in the toolbar controls.
+  const selectedText = shapeList.find(
+    (s): s is TextShape => selectedIds.has(s.id) && s.type === 'text',
+  );
+  useEffect(() => {
+    if (selectedText) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTextStyle({
+        fontSize: selectedText.fontSize,
+        fontFamily: selectedText.fontFamily,
+        bold: selectedText.bold,
+        italic: selectedText.italic,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedText?.id,
+    selectedText?.fontSize,
+    selectedText?.fontFamily,
+    selectedText?.bold,
+    selectedText?.italic,
+  ]);
 
   // Broadcast viewport so peers can follow this user's view.
   useEffect(() => {
@@ -286,6 +318,24 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
       selectedShapes().forEach((s) => room.shapes.set(s.id, { ...s, z: z++ })),
     );
   }, [room, editable, shapeList, selectedShapes]);
+
+  // Update the active typography (used for new text) and apply it to any
+  // selected text shapes.
+  const changeTextStyle = useCallback(
+    (patch: Partial<TextStyle>) => {
+      setTextStyle((prev) => ({ ...prev, ...patch }));
+      if (!room || !editable) return;
+      const texts = shapeList.filter(
+        (s): s is TextShape => selectedIds.has(s.id) && s.type === 'text',
+      );
+      if (texts.length) {
+        room.doc.transact(() =>
+          texts.forEach((t) => room.shapes.set(t.id, { ...t, ...patch })),
+        );
+      }
+    },
+    [room, editable, shapeList, selectedIds],
+  );
 
   // Export the current selection if any, otherwise the whole board.
   const exportBoard = useCallback(
@@ -499,6 +549,21 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
       setTool('select');
       return;
     }
+    if (tool === 'text') {
+      room.shapes.set(id, {
+        ...base,
+        type: 'text',
+        text: '',
+        fontSize: textStyle.fontSize,
+        fontFamily: textStyle.fontFamily,
+        bold: textStyle.bold,
+        italic: textStyle.italic,
+      });
+      setSelectedIds(new Set([id]));
+      setEditingId(id);
+      setTool('select');
+      return;
+    }
     if (tool === 'pen') {
       gestureRef.current = { kind: 'pen', id, points: [x, y] };
       room.shapes.set(id, { ...base, type: 'path', points: [x, y] });
@@ -584,9 +649,18 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
   }
 
   function commitText(id: string, text: string) {
-    if (!room || !editable) return;
+    if (!room || !editable) {
+      setEditingId(null);
+      return;
+    }
     const shape = room.shapes.get(id);
-    if (shape && shape.type === 'note') room.shapes.set(id, { ...shape, text });
+    if (shape?.type === 'note') {
+      room.shapes.set(id, { ...shape, text });
+    } else if (shape?.type === 'text') {
+      // An emptied text element is discarded rather than left invisible.
+      if (text.trim() === '') room.shapes.delete(id);
+      else room.shapes.set(id, { ...shape, text });
+    }
     setEditingId(null);
   }
 
@@ -615,6 +689,9 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
         onBringToFront={bringToFront}
         onSendToBack={sendToBack}
         onExport={exportBoard}
+        showTextControls={editable && (tool === 'text' || selectedText != null)}
+        textStyle={textStyle}
+        onTextStyleChange={changeTextStyle}
         status={status}
         peers={peers}
         selfId={selfId}
@@ -785,6 +862,56 @@ function ShapeView({
           strokeLinejoin="round"
         />
       )}
+      {shape.type === 'text' &&
+        (editing ? (
+          <foreignObject
+            x={shape.x}
+            y={shape.y}
+            width={Math.max(b.w + 80, 160)}
+            height={Math.max(b.h + 16, shape.fontSize * 2)}
+          >
+            <textarea
+              autoFocus
+              defaultValue={shape.text}
+              onPointerDown={(e) => e.stopPropagation()}
+              onBlur={(e) => onCommitText(shape.id, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur();
+              }}
+              className="size-full resize-none border-none bg-transparent p-0 outline-none"
+              style={{
+                color: shape.color,
+                fontFamily: FONT_STACKS[shape.fontFamily],
+                fontSize: shape.fontSize,
+                fontWeight: shape.bold ? 700 : 400,
+                fontStyle: shape.italic ? 'italic' : 'normal',
+                lineHeight: TEXT_LINE_HEIGHT,
+              }}
+            />
+          </foreignObject>
+        ) : (
+          <text
+            x={shape.x}
+            y={shape.y}
+            fill={shape.color}
+            fontFamily={FONT_STACKS[shape.fontFamily]}
+            fontSize={shape.fontSize}
+            fontWeight={shape.bold ? 700 : 400}
+            fontStyle={shape.italic ? 'italic' : 'normal'}
+            style={{ cursor: editable ? 'text' : 'default' }}
+            onDoubleClick={onStartEdit}
+          >
+            {(shape.text || ' ').split('\n').map((line, i) => (
+              <tspan
+                key={`${shape.id}-${i}`}
+                x={shape.x}
+                dy={i === 0 ? shape.fontSize : shape.fontSize * TEXT_LINE_HEIGHT}
+              >
+                {line || ' '}
+              </tspan>
+            ))}
+          </text>
+        ))}
       {shape.type === 'note' && (
         <foreignObject x={shape.x} y={shape.y} width={shape.w} height={shape.h}>
           {editing ? (

@@ -1,4 +1,4 @@
-import { PALETTE, type Role, canEdit } from '@coalesce/board';
+import { type FontFamily, PALETTE, type Role, canEdit } from '@coalesce/board';
 import {
   Badge,
   Button,
@@ -12,11 +12,13 @@ import {
   TooltipTrigger,
 } from '@jasonruesch/react';
 import {
+  Bold,
   BringToFront,
   Check,
   Circle,
   Download,
   Eye,
+  Italic,
   MessageCircle,
   MousePointer2,
   Pencil,
@@ -26,6 +28,7 @@ import {
   Square,
   StickyNote,
   Trash2,
+  Type,
   Undo2,
 } from 'lucide-react';
 import { type ComponentType, useState } from 'react';
@@ -34,13 +37,24 @@ import { getToken } from '~/lib/auth';
 import type { ConnectionStatus } from '~/lib/use-room';
 import type { Peer } from '~/lib/use-presence';
 
-export type Tool = 'select' | 'rect' | 'ellipse' | 'note' | 'pen' | 'comment';
+export type Tool = 'select' | 'rect' | 'ellipse' | 'note' | 'pen' | 'text' | 'comment';
+
+/** Typography settings for the text tool and selected text shapes. */
+export interface TextStyle {
+  fontSize: number;
+  fontFamily: FontFamily;
+  bold: boolean;
+  italic: boolean;
+}
+
+const FONT_SIZES = [12, 16, 20, 24, 32, 48, 64];
 
 const TOOLS: { tool: Tool; label: string; Icon: ComponentType<{ size?: number }> }[] = [
   { tool: 'select', label: 'Select & move', Icon: MousePointer2 },
   { tool: 'rect', label: 'Rectangle', Icon: Square },
   { tool: 'ellipse', label: 'Ellipse', Icon: Circle },
   { tool: 'note', label: 'Sticky note', Icon: StickyNote },
+  { tool: 'text', label: 'Text', Icon: Type },
   { tool: 'pen', label: 'Freehand', Icon: Pencil },
   { tool: 'comment', label: 'Comment', Icon: MessageCircle },
 ];
@@ -66,6 +80,9 @@ export interface ToolbarProps {
   onBringToFront: () => void;
   onSendToBack: () => void;
   onExport: (format: 'png' | 'svg') => void;
+  showTextControls: boolean;
+  textStyle: TextStyle;
+  onTextStyleChange: (patch: Partial<TextStyle>) => void;
   status: ConnectionStatus;
   peers: Peer[];
   selfId: number;
@@ -149,6 +166,53 @@ export function Toolbar(props: ToolbarProps) {
               />
             ))}
           </div>
+
+          {props.showTextControls && (
+            <div className="flex items-center gap-1">
+              <select
+                aria-label="Font"
+                value={props.textStyle.fontFamily}
+                onChange={(e) =>
+                  props.onTextStyleChange({ fontFamily: e.target.value as FontFamily })
+                }
+                className="h-9 rounded-md border border-line bg-canvas px-2 text-sm outline-none"
+              >
+                <option value="sans">Sans</option>
+                <option value="serif">Serif</option>
+                <option value="mono">Mono</option>
+              </select>
+              <select
+                aria-label="Font size"
+                value={props.textStyle.fontSize}
+                onChange={(e) =>
+                  props.onTextStyleChange({ fontSize: Number(e.target.value) })
+                }
+                className="h-9 rounded-md border border-line bg-canvas px-2 text-sm outline-none"
+              >
+                {FONT_SIZES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <IconButton
+                variant={props.textStyle.bold ? 'primary' : 'ghost'}
+                aria-label="Bold"
+                aria-pressed={props.textStyle.bold}
+                onClick={() => props.onTextStyleChange({ bold: !props.textStyle.bold })}
+              >
+                <Bold size={18} />
+              </IconButton>
+              <IconButton
+                variant={props.textStyle.italic ? 'primary' : 'ghost'}
+                aria-label="Italic"
+                aria-pressed={props.textStyle.italic}
+                onClick={() => props.onTextStyleChange({ italic: !props.textStyle.italic })}
+              >
+                <Italic size={18} />
+              </IconButton>
+            </div>
+          )}
 
           <div className="flex items-center gap-1">
             <Tooltip>

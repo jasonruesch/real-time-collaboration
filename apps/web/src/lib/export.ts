@@ -1,4 +1,11 @@
-import { type Bounds, type Shape, pointsToPath, shapeBounds } from '@coalesce/board';
+import {
+  type Bounds,
+  FONT_STACKS,
+  type Shape,
+  TEXT_LINE_HEIGHT,
+  pointsToPath,
+  shapeBounds,
+} from '@coalesce/board';
 
 /**
  * Export shapes to a self-contained SVG (and PNG via canvas). Notes are
@@ -60,6 +67,17 @@ function shapeToSvg(shape: Shape): string {
   }
   if (shape.type === 'path') {
     return `<path d="${pointsToPath(shape.points)}" fill="none" stroke="${c}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  if (shape.type === 'text') {
+    const lh = shape.fontSize * TEXT_LINE_HEIGHT;
+    const spans = (shape.text || '')
+      .split('\n')
+      .map(
+        (line, i) =>
+          `<tspan x="${shape.x}" dy="${i === 0 ? shape.fontSize : lh}">${escapeXml(line || ' ')}</tspan>`,
+      )
+      .join('');
+    return `<text x="${shape.x}" y="${shape.y}" fill="${c}" font-family="${escapeXml(FONT_STACKS[shape.fontFamily])}" font-size="${shape.fontSize}" font-weight="${shape.bold ? 700 : 400}" font-style="${shape.italic ? 'italic' : 'normal'}">${spans}</text>`;
   }
   // note
   const lines = wrap(shape.text)
