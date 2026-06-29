@@ -15,6 +15,7 @@ import {
   BringToFront,
   Check,
   Circle,
+  Download,
   Eye,
   MessageCircle,
   MousePointer2,
@@ -64,6 +65,7 @@ export interface ToolbarProps {
   canRedo: boolean;
   onBringToFront: () => void;
   onSendToBack: () => void;
+  onExport: (format: 'png' | 'svg') => void;
   status: ConnectionStatus;
   peers: Peer[];
   selfId: number;
@@ -255,6 +257,21 @@ export function Toolbar(props: ToolbarProps) {
           followId={props.followId}
           onFollow={props.onFollow}
         />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton variant="ghost" aria-label="Export">
+              <Download size={18} />
+            </IconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => props.onExport('png')}>
+              Export PNG
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => props.onExport('svg')}>
+              Export SVG
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {isOwner ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

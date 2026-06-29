@@ -39,6 +39,11 @@ A pnpm + Turborepo monorepo with a single-origin deployment:
 - **Scale:** with `REDIS_URL` set, instances fan room updates out to each other
   over Redis pub/sub, so the app runs behind a load balancer across many
   machines. A per-connection token bucket rate-limits abusive sockets.
+- **Editing:** pan/zoom canvas, multi-select with marquee, inline note text,
+  copy/paste/duplicate, per-user undo/redo, and z-ordering.
+- **Collaboration:** live cursors, selection awareness, follow-mode, and pinned
+  comment threads.
+- **Export:** download the board (or a selection) as PNG or SVG.
 
 ### Configuration
 

@@ -23,6 +23,7 @@ import { CommentsLayer } from '~/components/comments-layer';
 import { CursorsLayer } from '~/components/cursors-layer';
 import { Toolbar, type Tool } from '~/components/toolbar';
 import { roleFromToken, userSeed } from '~/lib/auth';
+import { downloadPng, downloadSvg } from '~/lib/export';
 import { useComments } from '~/lib/use-comments';
 import { makeUser } from '~/lib/use-local-user';
 import { usePresence } from '~/lib/use-presence';
@@ -285,6 +286,18 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
       selectedShapes().forEach((s) => room.shapes.set(s.id, { ...s, z: z++ })),
     );
   }, [room, editable, shapeList, selectedShapes]);
+
+  // Export the current selection if any, otherwise the whole board.
+  const exportBoard = useCallback(
+    (format: 'png' | 'svg') => {
+      const sel = selectedShapes();
+      const subject = sel.length ? sel : shapeList;
+      if (subject.length === 0) return;
+      if (format === 'png') void downloadPng(subject, roomId);
+      else downloadSvg(subject, roomId);
+    },
+    [selectedShapes, shapeList, roomId],
+  );
 
   const sendToBack = useCallback(() => {
     if (!room || !editable) return;
@@ -601,6 +614,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
         canRedo={undoState.canRedo}
         onBringToFront={bringToFront}
         onSendToBack={sendToBack}
+        onExport={exportBoard}
         status={status}
         peers={peers}
         selfId={selfId}
