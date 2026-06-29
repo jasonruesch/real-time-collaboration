@@ -16,7 +16,13 @@ export function usePresence(awareness: Awareness | undefined): Peer[] {
       const next: Peer[] = [];
       awareness.getStates().forEach((state, clientId) => {
         const s = state as Partial<Presence>;
-        next.push({ clientId, user: s.user, cursor: s.cursor });
+        next.push({
+          clientId,
+          user: s.user,
+          cursor: s.cursor,
+          selection: s.selection,
+          viewport: s.viewport,
+        });
       });
       setPeers(next);
     };

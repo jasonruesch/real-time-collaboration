@@ -16,6 +16,7 @@ import {
   Check,
   Circle,
   Eye,
+  MessageCircle,
   MousePointer2,
   Pencil,
   Redo2,
@@ -32,7 +33,7 @@ import { getToken } from '~/lib/auth';
 import type { ConnectionStatus } from '~/lib/use-room';
 import type { Peer } from '~/lib/use-presence';
 
-export type Tool = 'select' | 'rect' | 'ellipse' | 'note' | 'pen';
+export type Tool = 'select' | 'rect' | 'ellipse' | 'note' | 'pen' | 'comment';
 
 const TOOLS: { tool: Tool; label: string; Icon: ComponentType<{ size?: number }> }[] = [
   { tool: 'select', label: 'Select & move', Icon: MousePointer2 },
@@ -40,6 +41,7 @@ const TOOLS: { tool: Tool; label: string; Icon: ComponentType<{ size?: number }>
   { tool: 'ellipse', label: 'Ellipse', Icon: Circle },
   { tool: 'note', label: 'Sticky note', Icon: StickyNote },
   { tool: 'pen', label: 'Freehand', Icon: Pencil },
+  { tool: 'comment', label: 'Comment', Icon: MessageCircle },
 ];
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
@@ -65,6 +67,8 @@ export interface ToolbarProps {
   status: ConnectionStatus;
   peers: Peer[];
   selfId: number;
+  followId: number | null;
+  onFollow: (clientId: number) => void;
   role: Role;
   roomId: string;
 }
@@ -245,7 +249,12 @@ export function Toolbar(props: ToolbarProps) {
           />
           {STATUS_LABEL[props.status]}
         </span>
-        <PresenceBar peers={props.peers} selfId={props.selfId} />
+        <PresenceBar
+          peers={props.peers}
+          selfId={props.selfId}
+          followId={props.followId}
+          onFollow={props.onFollow}
+        />
         {isOwner ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
