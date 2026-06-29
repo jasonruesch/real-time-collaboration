@@ -10,6 +10,7 @@ import {
   nextZ,
   normalizeRect,
   pointsToPath,
+  resizeShape,
   sortByZ,
 } from '@coalesce/board';
 import { Spinner } from '@jasonruesch/react';
@@ -40,6 +41,32 @@ const MIN_DRAG = 4;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 5;
 const PASTE_OFFSET = 20;
+const MIN_RESIZE = 8;
+const HANDLE_PX = 9; // on-screen size of a resize handle
+
+// Eight resize handles as [name, x-fraction, y-fraction] of the bounding box.
+const HANDLES = [
+  ['nw', 0, 0],
+  ['n', 0.5, 0],
+  ['ne', 1, 0],
+  ['e', 1, 0.5],
+  ['se', 1, 1],
+  ['s', 0.5, 1],
+  ['sw', 0, 1],
+  ['w', 0, 0.5],
+] as const;
+type Handle = (typeof HANDLES)[number][0];
+
+const HANDLE_CURSOR: Record<Handle, string> = {
+  nw: 'nwse-resize',
+  se: 'nwse-resize',
+  ne: 'nesw-resize',
+  sw: 'nesw-resize',
+  n: 'ns-resize',
+  s: 'ns-resize',
+  e: 'ew-resize',
+  w: 'ew-resize',
+};
 
 /** Pan + zoom of the board relative to the screen. */
 interface Viewport {
@@ -60,6 +87,7 @@ type Gesture =
   | { kind: 'create'; id: string; startX: number; startY: number }
   | { kind: 'pen'; id: string; points: number[] }
   | { kind: 'move'; startX: number; startY: number; orig: Shape[] }
+  | { kind: 'resize'; id: string; handle: Handle; orig: Shape; from: Bounds }
   | { kind: 'marquee'; startX: number; startY: number; curX: number; curY: number; additive: boolean }
   | { kind: 'pan'; startSX: number; startSY: number; origX: number; origY: number };
 
@@ -91,6 +119,14 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
 
   // Shapes painted bottom-to-top by stacking order.
   const ordered = sortByZ(shapeList);
+
+  // A single selected, resizable shape gets resize handles. Text is sized via
+  // its font controls, so it's excluded.
+  const soleId = selectedIds.size === 1 ? [...selectedIds][0] : null;
+  const resizeTarget = soleId
+    ? ordered.find((s) => s.id === soleId && s.type !== 'text')
+    : undefined;
+  const resizeBounds = editable && resizeTarget ? boundsOf(resizeTarget) : null;
 
   const surfaceRef = useRef<HTMLDivElement>(null);
   const gestureRef = useRef<Gesture | null>(null);
@@ -481,6 +517,26 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
     const { x, y } = toBoard(e);
 
     if (tool === 'select') {
+      // A resize handle of the sole-selected shape takes priority over hit-tests.
+      if (resizeTarget && resizeBounds) {
+        const r = HANDLE_PX / viewportRef.current.scale;
+        const handle = HANDLES.find(([, fx, fy]) => {
+          const hx = resizeBounds.x + fx * resizeBounds.w;
+          const hy = resizeBounds.y + fy * resizeBounds.h;
+          return Math.abs(x - hx) <= r && Math.abs(y - hy) <= r;
+        });
+        if (handle) {
+          gestureRef.current = {
+            kind: 'resize',
+            id: resizeTarget.id,
+            handle: handle[0],
+            orig: resizeTarget,
+            from: resizeBounds,
+          };
+          return;
+        }
+      }
+
       // Topmost shape under the pointer wins (highest stacking order).
       const hit = [...ordered].reverse().find((s) => {
         const b = boundsOf(s);
@@ -607,6 +663,18 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
       if (prev && prev.type === 'path') {
         scheduleWrite(() => room.shapes.set(g.id, { ...prev, points }));
       }
+    } else if (g.kind === 'resize') {
+      const B = g.from;
+      let left = B.x;
+      let right = B.x + B.w;
+      let top = B.y;
+      let bottom = B.y + B.h;
+      if (g.handle.includes('w')) left = Math.min(x, right - MIN_RESIZE);
+      if (g.handle.includes('e')) right = Math.max(x, left + MIN_RESIZE);
+      if (g.handle.includes('n')) top = Math.min(y, bottom - MIN_RESIZE);
+      if (g.handle.includes('s')) bottom = Math.max(y, top + MIN_RESIZE);
+      const to = { x: left, y: top, w: right - left, h: bottom - top };
+      scheduleWrite(() => room.shapes.set(g.id, resizeShape(g.orig, B, to)));
     } else if (g.kind === 'marquee') {
       g.curX = x;
       g.curY = y;
@@ -773,6 +841,28 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
                   );
                 }),
               )}
+            {/* Resize handles for the sole selected shape. */}
+            {resizeBounds &&
+              HANDLES.map(([name, fx, fy]) => {
+                const size = HANDLE_PX / viewport.scale;
+                const hx = resizeBounds.x + fx * resizeBounds.w;
+                const hy = resizeBounds.y + fy * resizeBounds.h;
+                return (
+                  <rect
+                    key={name}
+                    x={hx - size / 2}
+                    y={hy - size / 2}
+                    width={size}
+                    height={size}
+                    rx={size * 0.2}
+                    fill="var(--color-canvas, #ffffff)"
+                    stroke="var(--color-accent, #6366f1)"
+                    strokeWidth={1.5}
+                    vectorEffect="non-scaling-stroke"
+                    style={{ cursor: HANDLE_CURSOR[name] }}
+                  />
+                );
+              })}
           </g>
         </svg>
         <CursorsLayer
