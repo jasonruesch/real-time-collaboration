@@ -489,11 +489,24 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
       } else if (mod && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         duplicate();
+      } else if (!mod && e.key.startsWith('Arrow')) {
+        // Nudge selected shapes; hold Shift for a larger step.
+        if (!room || !editable || selectedIds.size === 0) return;
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+        const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+        room.doc.transact(() => {
+          selectedIds.forEach((id) => {
+            const s = room.shapes.get(id);
+            if (s) room.shapes.set(id, moveShape(s, dx, dy));
+          });
+        });
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [deleteSelected, undo, redo, copy, paste, duplicate]);
+  }, [room, editable, selectedIds, deleteSelected, undo, redo, copy, paste, duplicate]);
 
   // ---- Pointer handling -----------------------------------------------------
 
@@ -706,6 +719,7 @@ export function Whiteboard({ roomId, token }: { roomId: string; token?: string |
         room.shapes.delete(g.id);
       } else {
         setSelectedIds(new Set([g.id]));
+        setTool('select');
       }
     } else if (g.kind === 'marquee') {
       const box = normalizeRect(g.startX, g.startY, g.curX, g.curY);
